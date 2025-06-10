@@ -10,6 +10,15 @@ export default defineConfig(({ mode }) => ({
     host: "0.0.0.0",
     port: 8080,
   },
+  preview: {
+    host: true,
+    port: 8080,
+    strictPort: true,
+    allowedHosts: [
+      'frigo1006.onrender.com',
+      'localhost',
+    ]
+  },
   plugins: [
     react(),
     // Use the updated lovable-tagger in development mode
