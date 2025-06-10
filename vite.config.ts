@@ -8,12 +8,12 @@ import { componentTagger } from "lovable-tagger";
 export default defineConfig(({ mode }) => ({
   server: {
     host: "0.0.0.0",
-    port: 8080,
+    port: 4173,
   },
   preview: {
     host: true,
-    port: 8080,
-    strictPort: true,
+    port: 4173,
+    strictPort: false,
     allowedHosts: [
       'frigo1006.onrender.com',
       'localhost',
