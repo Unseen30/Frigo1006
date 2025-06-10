@@ -75,7 +75,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",
-    "@rollup/rollup-win32-x64-msvc": "^4.41.1",
+    "rollup": "^4.0.0",
     "@supabase/supabase-js": "^2.49.10",
     "@tailwindcss/typography": "^0.5.15",
     "@types/node": "^22.15.30",
