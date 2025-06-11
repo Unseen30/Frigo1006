@@ -1,7 +1,12 @@
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { AlertCircle, MapPin, MapPinOff } from "lucide-react";
+import { checkLocationPermissions, checkLocationEnabled } from "@/utils/locationPermissions";
+import { startBackgroundTracking, stopBackgroundTracking } from "@/utils/backgroundLocation";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface LocationTrackerProps {
   tripId: string;
@@ -10,9 +15,13 @@ interface LocationTrackerProps {
 
 export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerProps) => {
   const [tracking, setTracking] = useState(false);
+  const [showPermissionDialog, setShowPermissionDialog] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [isCheckingLocation, setIsCheckingLocation] = useState(false);
   const watchId = useRef<number | null>(null);
   const lastPosition = useRef<GeolocationPosition | null>(null);
   const totalDistance = useRef<number>(0);
+  const permissionChecked = useRef(false);
 
   // Fórmula de Haversine para calcular distancia entre dos puntos GPS
   const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -89,68 +98,226 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
     }
   };
 
-  useEffect(() => {
-    if (!tripId) return;
+  const verifyLocationStatus = useCallback(async () => {
+    try {
+      setIsCheckingLocation(true);
+      setLocationError(null);
+      
+      // Verificar permisos de ubicación
+      const hasPermission = await checkLocationPermissions();
+      if (!hasPermission) {
+        setShowPermissionDialog(true);
+        return false;
+      }
 
-    const startTracking = () => {
+      // Verificar si la ubicación está activada
+      const isEnabled = await checkLocationEnabled();
+      if (!isEnabled) {
+        setLocationError('La ubicación parece estar desactivada. Actívala para continuar.');
+        setShowPermissionDialog(true);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error al verificar el estado de la ubicación:', error);
+      setLocationError('Error al verificar el estado de la ubicación');
+      return false;
+    } finally {
+      setIsCheckingLocation(false);
+    }
+  }, []);
+
+  const startLocationTracking = useCallback(async () => {
+    if (!tripId) return;
+    
+    try {
+      const isReady = await verifyLocationStatus();
+      if (!isReady) return;
+
       if (!navigator.geolocation) {
-        toast.error('Geolocalización no disponible en este dispositivo');
+        setLocationError('La geolocalización no está disponible en este dispositivo');
         return;
       }
 
-      // Obtener la posición inicial y distancia acumulada
-      const initializeDistance = async () => {
-        try {
-          const { data: existingPoints, error } = await supabase
-            .from('route_points')
-            .select('latitude, longitude')
-            .eq('trip_id', tripId)
-            .order('timestamp', { ascending: true });
+      setLocationError(null);
 
-          if (error) throw error;
-
-          if (existingPoints && existingPoints.length > 1) {
-            let accumulatedDistance = 0;
-            
-            for (let i = 1; i < existingPoints.length; i++) {
-              const distance = calculateHaversineDistance(
-                existingPoints[i-1].latitude,
-                existingPoints[i-1].longitude,
-                existingPoints[i].latitude,
-                existingPoints[i].longitude
-              );
-              accumulatedDistance += distance;
-            }
-            
-            totalDistance.current = accumulatedDistance;
-            onDistanceUpdate?.(totalDistance.current);
-            console.log(`Distancia inicial recuperada: ${totalDistance.current.toFixed(2)} km`);
-          }
-        } catch (error) {
-          console.error('Error al recuperar puntos existentes:', error);
-        }
+      const onPositionSuccess = (position: GeolocationPosition) => {
+        setLocationError(null);
+        handlePositionUpdate(position);
       };
 
-      initializeDistance();
+      const onPositionError = (error: GeolocationPositionError) => {
+        console.error('Error de geolocalización:', error);
+        let errorMessage = 'Error al obtener la ubicación';
+        
+        switch(error.code) {
+          case error.PERMISSION_DENIED:
+            errorMessage = 'Permiso de ubicación denegado. Por favor, activa la ubicación en la configuración de tu dispositivo.';
+            setShowPermissionDialog(true);
+            break;
+          case error.POSITION_UNAVAILABLE:
+            errorMessage = 'La información de ubicación no está disponible. Asegúrate de tener conexión a Internet y el GPS activado.';
+            break;
+          case error.TIMEOUT:
+            errorMessage = 'Tiempo de espera agotado al intentar obtener la ubicación.';
+            break;
+        }
+        
+        setLocationError(errorMessage);
+        toast.error(errorMessage);
+      };
 
-      watchId.current = navigator.geolocation.watchPosition(
-        handlePositionUpdate,
-        (error) => {
-          console.error('Error de geolocalización:', error);
-          toast.error('Error al obtener la ubicación');
-        },
-        {
+      // Obtener la posición actual primero
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
           enableHighAccuracy: true,
           timeout: 10000,
-          maximumAge: 30000 // Permitir ubicaciones de hasta 30 segundos de antigüedad
+          maximumAge: 0
+        });
+      });
+
+      // Si llegamos aquí, la ubicación está disponible
+      onPositionSuccess(position);
+      
+      // Iniciar el seguimiento continuo
+      watchId.current = navigator.geolocation.watchPosition(
+        onPositionSuccess,
+        onPositionError,
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 30000
         }
       );
 
       setTracking(true);
-      toast.success('Seguimiento de ubicación iniciado con cálculo Haversine');
+      toast.success('Seguimiento de ubicación iniciado');
+    } catch (error) {
+      console.error('Error al iniciar el seguimiento de ubicación:', error);
+      setLocationError('No se pudo acceder a la ubicación. Verifica los permisos y la configuración.');
+      setShowPermissionDialog(true);
+    }
+  }, [tripId, verifyLocationStatus]);
+
+  const handleEnableLocation = async () => {
+    try {
+      // Intentar obtener la ubicación para activar el diálogo de permisos
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          resolve,
+          reject,
+          { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+        );
+      });
+      
+      // Si llegamos aquí, los permisos fueron otorgados
+      setShowPermissionDialog(false);
+      await startLocationTracking();
+    } catch (error) {
+      console.error('Error al intentar habilitar la ubicación:', error);
+      toast.error('No se pudo habilitar la ubicación. Por favor, verifica los permisos en la configuración de tu dispositivo.');
+    }
+  };
+
+  // Manejar el estado de la aplicación (primer plano/segundo plano)
+  useEffect(() => {
+    if (!tripId) return;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // La aplicación está en primer plano
+        stopBackgroundTracking();
+        startLocationTracking();
+      } else {
+        // La aplicación está en segundo plano o en otra pestaña
+        if (watchId.current !== null) {
+          navigator.geolocation.clearWatch(watchId.current);
+          watchId.current = null;
+        }
+        startBackgroundTracking(tripId);
+      }
     };
 
-    startTracking();
+    // Registrar el event listener para cambios de visibilidad
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Iniciar el seguimiento cuando el componente se monta
+    if (!permissionChecked.current) {
+      startLocationTracking();
+      permissionChecked.current = true;
+    }
+
+    // Limpiar al desmontar
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      
+      if (watchId.current !== null) {
+        navigator.geolocation.clearWatch(watchId.current);
+        watchId.current = null;
+      }
+      
+      stopBackgroundTracking();
+      setTracking(false);
+    };
+  }, [tripId, startLocationTracking]);
+
+  const startTracking = useCallback(async () => {
+    if (!navigator.geolocation) {
+      setLocationError('La geolocalización no está disponible en este dispositivo');
+      return;
+    }
+
+    // Obtener la posición inicial y distancia acumulada
+    const initializeDistance = async () => {
+      try {
+        const { data: existingPoints, error } = await supabase
+          .from('route_points')
+          .select('latitude, longitude')
+          .eq('trip_id', tripId)
+          .order('timestamp', { ascending: true });
+
+        if (error) throw error;
+
+        if (existingPoints && existingPoints.length > 1) {
+          let accumulatedDistance = 0;
+          
+          for (let i = 1; i < existingPoints.length; i++) {
+            const distance = calculateHaversineDistance(
+              existingPoints[i-1].latitude,
+              existingPoints[i-1].longitude,
+              existingPoints[i].latitude,
+              existingPoints[i].longitude
+            );
+            accumulatedDistance += distance;
+          }
+          
+          totalDistance.current = accumulatedDistance;
+          onDistanceUpdate?.(totalDistance.current);
+          console.log(`Distancia inicial recuperada: ${totalDistance.current.toFixed(2)} km`);
+        }
+      } catch (error) {
+        console.error('Error al recuperar puntos existentes:', error);
+      }
+    };
+
+    await initializeDistance();
+
+    watchId.current = navigator.geolocation.watchPosition(
+      handlePositionUpdate,
+      (error) => {
+        console.error('Error de geolocalización:', error);
+        toast.error('Error al obtener la ubicación');
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 30000 // Permitir ubicaciones de hasta 30 segundos de antigüedad
+      }
+    );
+
+    setTracking(true);
+    toast.success('Seguimiento de ubicación iniciado con cálculo Haversine');
 
     return () => {
       if (watchId.current !== null) {
@@ -159,19 +326,111 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
         setTracking(false);
       }
     };
-  }, [tripId]);
+  }, [tripId, handlePositionUpdate, onDistanceUpdate]);
 
   return (
-    <div className="flex items-center gap-2 text-sm">
-      <span className={`w-2 h-2 rounded-full ${tracking ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
-      <span className="text-gray-600">
-        {tracking ? 'Tracking GPS activo (Haversine)' : 'Tracking inactivo'}
-      </span>
-      {totalDistance.current > 0 && (
-        <span className="text-primary font-semibold ml-2">
-          {totalDistance.current.toFixed(2)} km
-        </span>
+    <div className="w-full">
+      <div className="flex items-center gap-2 text-sm mb-2">
+        <div className={`p-1.5 rounded-full ${
+          tracking ? 'bg-green-100 text-green-600' : 
+          locationError ? 'bg-red-100 text-red-600' : 
+          'bg-gray-100 text-gray-600'
+        }`}>
+          {tracking ? (
+            <MapPin className="h-4 w-4 animate-pulse" />
+          ) : locationError ? (
+            <MapPinOff className="h-4 w-4" />
+          ) : (
+            <MapPin className="h-4 w-4" />
+          )}
+        </div>
+        <div className="flex-1">
+          <p className="text-sm font-medium">
+            {tracking ? 'Seguimiento activo' : 
+             locationError ? 'Error de ubicación' : 'Seguimiento inactivo'}
+          </p>
+          <p className="text-xs text-gray-500">
+            {tracking ? 'Ubicación en tiempo real activada' : 
+             locationError ? 'No se puede acceder a la ubicación' : 'Esperando activación...'}
+          </p>
+        </div>
+        {totalDistance.current > 0 && (
+          <div className="text-right">
+            <p className="text-sm font-semibold text-primary">
+              {totalDistance.current.toFixed(2)} km
+            </p>
+            <p className="text-xs text-gray-500">Distancia recorrida</p>
+          </div>
+        )}
+      </div>
+
+      {locationError && (
+        <div className="mt-2 p-3 bg-red-50 border border-red-100 rounded-md text-sm text-red-700 flex items-start">
+          <AlertCircle className="h-4 w-4 mr-2 mt-0.5 flex-shrink-0" />
+          <span>{locationError}</span>
+        </div>
       )}
+
+      <Dialog open={showPermissionDialog} onOpenChange={setShowPermissionDialog}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <div className="flex items-center justify-center mb-4">
+              <div className="bg-yellow-100 p-3 rounded-full">
+                <MapPin className="h-8 w-8 text-yellow-600" />
+              </div>
+            </div>
+            <DialogTitle className="text-center text-lg">
+              Permiso de ubicación requerido
+            </DialogTitle>
+            <DialogDescription className="text-center">
+              Para continuar, necesitamos acceder a tu ubicación. Por favor, activa los permisos de ubicación en la configuración de tu dispositivo.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <div className="flex items-start space-x-3">
+              <div className="bg-blue-50 p-2 rounded-full">
+                <MapPin className="h-4 w-4 text-blue-600" />
+              </div>
+              <div>
+                <h4 className="font-medium">Activa la ubicación</h4>
+                <p className="text-sm text-gray-500">
+                  Asegúrate de que la ubicación esté activada en la configuración de tu dispositivo.
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex items-start space-x-3">
+              <div className="bg-green-50 p-2 rounded-full">
+                <MapPin className="h-4 w-4 text-green-600" />
+              </div>
+              <div>
+                <h4 className="font-medium">Selecciona "Permitir siempre"</h4>
+                <p className="text-sm text-gray-500">
+                  Para un mejor seguimiento, permite el acceso a la ubicación en todo momento.
+                </p>
+              </div>
+            </div>
+          </div>
+          
+          <DialogFooter className="sm:flex sm:flex-row-reverse gap-2">
+            <Button 
+              onClick={handleEnableLocation}
+              className="w-full sm:w-auto"
+              disabled={isCheckingLocation}
+            >
+              {isCheckingLocation ? 'Verificando...' : 'Activar ubicación'}
+            </Button>
+            <Button 
+              variant="outline" 
+              onClick={() => setShowPermissionDialog(false)}
+              className="w-full sm:w-auto"
+            >
+              Cerrar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

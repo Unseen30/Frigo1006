@@ -16,6 +16,7 @@
     "@capacitor/android": "^7.0.1",
     "@capacitor/cli": "^7.0.1",
     "@capacitor/core": "^7.0.1",
+    "@capacitor/geolocation": "^7.1.2",
     "@googlemaps/js-api-loader": "^1.16.8",
     "@googlemaps/polyline-codec": "^1.0.28",
     "@hookform/resolvers": "^3.9.0",

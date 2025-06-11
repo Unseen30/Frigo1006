@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   appName: 'FrigoTrack',
   webDir: 'dist',
   server: {
-    url: 'http://10.0.2.2:8080', // Use local server for development
+    androidScheme: 'https',
     cleartext: true
   },
   android: {
