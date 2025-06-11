@@ -103,9 +103,16 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
       setIsCheckingLocation(true);
       setLocationError(null);
       
+      // Verificar si el navegador soporta geolocalización
+      if (!navigator.geolocation) {
+        setLocationError('La geolocalización no es compatible con tu navegador');
+        return false;
+      }
+
       // Verificar permisos de ubicación
       const hasPermission = await checkLocationPermissions();
       if (!hasPermission) {
+        setLocationError('Por favor, permite el acceso a tu ubicación para continuar');
         setShowPermissionDialog(true);
         return false;
       }
@@ -121,7 +128,7 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
       return true;
     } catch (error) {
       console.error('Error al verificar el estado de la ubicación:', error);
-      setLocationError('Error al verificar el estado de la ubicación');
+      setLocationError('No se pudo verificar el estado de la ubicación. Intenta recargar la página.');
       return false;
     } finally {
       setIsCheckingLocation(false);
@@ -202,21 +209,21 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
 
   const handleEnableLocation = async () => {
     try {
-      // Intentar obtener la ubicación para activar el diálogo de permisos
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-          resolve,
-          reject,
-          { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-        );
-      });
-      
-      // Si llegamos aquí, los permisos fueron otorgados
       setShowPermissionDialog(false);
+      
+      // Esperar un momento para que se cierre el diálogo
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Iniciar el seguimiento de ubicación
       await startLocationTracking();
+      
+      // Mostrar mensaje de éxito si se inicia correctamente
+      if (tracking) {
+        toast.success('Seguimiento de ubicación activado');
+      }
     } catch (error) {
       console.error('Error al intentar habilitar la ubicación:', error);
-      toast.error('No se pudo habilitar la ubicación. Por favor, verifica los permisos en la configuración de tu dispositivo.');
+      toast.error('No se pudo habilitar la ubicación. Por favor, verifica que los permisos estén habilitados.');
     }
   };
 
