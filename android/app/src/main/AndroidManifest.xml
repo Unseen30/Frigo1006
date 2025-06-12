@@ -33,6 +33,12 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+        <!-- Servicio en primer plano para la ubicación en segundo plano -->
+        <service
+            android:name="de.mannodermaus.routenschild.android.location.LocationService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="location" />
     </application>
 
     <!-- Permisos de ubicación -->
@@ -45,11 +51,4 @@
     
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-feature android:name="android.hardware.location.network" android:required="false" />
-    
-    <!-- Servicio en primer plano para la ubicación en segundo plano -->
-    <service
-        android:name="de.mannodermaus.routenschild.android.location.LocationService"
-        android:enabled="true"
-        android:exported="false"
-        android:foregroundServiceType="location" />
 </manifest>
