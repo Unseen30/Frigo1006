@@ -1,6 +1,22 @@
-import { toast } from 'sonner';
+import { Geolocation } from '@capacitor/geolocation';
+import { isPlatform } from '@ionic/react';
 
 export const checkLocationPermissions = async (): Promise<boolean> => {
+  // Para Android/iOS usando Capacitor
+  if (isPlatform('android') || isPlatform('ios')) {
+    try {
+      const permission = await Geolocation.checkPermissions();
+      if (permission.location === 'granted') return true;
+      
+      const request = await Geolocation.requestPermissions();
+      return request.location === 'granted';
+    } catch (error) {
+      console.error('Error verificando permisos de ubicación:', error);
+      return false;
+    }
+  }
+  
+  // Código para navegadores web
   return new Promise((resolve) => {
     if (!navigator.geolocation) {
       console.error('La geolocalización no está disponible en este navegador');
