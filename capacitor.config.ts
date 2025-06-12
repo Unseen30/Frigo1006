@@ -29,8 +29,18 @@ const config: CapacitorConfig = {
     },
     Geolocation: {
       permissions: {
-        location: "always"
+        android: {
+          fineLocation: ["foreground", "background"],
+          coarseLocation: ["foreground", "background"]
+        }
       }
+    },
+    BackgroundRunner: {
+      label: 'com.lovable.cargotracker.background',
+      src: 'runners/background.js',
+      event: 'background-location-update',
+      autoStart: true,
+      autoStartBoot: true
     },
     Camera: {
       permissions: {
