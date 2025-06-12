@@ -8,32 +8,45 @@ export const checkLocationPermissions = async (): Promise<boolean> => {
       return;
     }
 
-    if (navigator.permissions) {
-      // Usar la API de Permissions si está disponible
-      navigator.permissions.query({ name: 'geolocation' as PermissionName })
-        .then((permissionStatus) => {
-          if (permissionStatus.state === 'granted') {
-            resolve(true);
-          } else {
-            resolve(false);
-          }
-        })
-        .catch(() => {
-          // Fallback para navegadores que no soportan la API de Permissions
-          navigator.geolocation.getCurrentPosition(
-            () => resolve(true),
-            () => resolve(false),
-            { enableHighAccuracy: true, timeout: 1000 }
-          );
-        });
-    } else {
-      // Para navegadores que no soportan la API de Permissions
-      navigator.geolocation.getCurrentPosition(
-        () => resolve(true),
-        () => resolve(false),
-        { enableHighAccuracy: true, timeout: 1000 }
-      );
-    }
+    // Primero intentamos con getCurrentPosition para forzar el diálogo si es necesario
+    navigator.geolocation.getCurrentPosition(
+      () => {
+        // Si llegamos aquí, los permisos están concedidos
+        console.log('Permisos de ubicación concedidos (getCurrentPosition)');
+        resolve(true);
+      },
+      (error) => {
+        console.log('Error en getCurrentPosition:', error);
+        // Si hay un error, verificamos el estado del permiso
+        if (navigator.permissions) {
+          navigator.permissions.query({ name: 'geolocation' as PermissionName })
+            .then((permissionStatus) => {
+              console.log('Estado del permiso:', permissionStatus.state);
+              if (permissionStatus.state === 'granted') {
+                resolve(true);
+              } else {
+                // Configuramos un listener para cambios en el permiso
+                const permissionListener = (event: any) => {
+                  console.log('Cambio en el estado del permiso:', event.target.state);
+                  if (event.target.state === 'granted') {
+                    resolve(true);
+                    permissionStatus.removeEventListener('change', permissionListener);
+                  }
+                };
+                permissionStatus.addEventListener('change', permissionListener);
+                resolve(false);
+              }
+            })
+            .catch((error) => {
+              console.error('Error al verificar permisos:', error);
+              resolve(false);
+            });
+        } else {
+          resolve(false);
+        }
+      },
+      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+    );
   });
 };
 
@@ -46,77 +59,78 @@ export const requestLocationPermissions = async (): Promise<boolean> => {
       return;
     }
 
-    // Primero verificamos el estado del permiso
-    if (navigator.permissions) {
-      navigator.permissions.query({ name: 'geolocation' as PermissionName })
-        .then(async (permissionStatus) => {
-          if (permissionStatus.state === 'granted') {
-            resolve(true);
-            return;
-          }
-          
-          // Si el permiso no está concedido, intentamos obtener la ubicación
-          // para activar el diálogo de permisos
-          try {
-            const position = await new Promise<GeolocationPosition>((positionResolve, positionReject) => {
-              navigator.geolocation.getCurrentPosition(
-                positionResolve,
-                positionReject,
-                { 
-                  enableHighAccuracy: true,
-                  timeout: 10000,
-                  maximumAge: 0
+    console.log('Solicitando permisos de ubicación...');
+    
+    // Primero intentamos con getCurrentPosition para forzar el diálogo
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        console.log('Ubicación obtenida correctamente');
+        toast.success('Permiso de ubicación concedido');
+        resolve(true);
+      },
+      async (error) => {
+        console.error('Error al obtener ubicación:', error);
+        
+        // Verificar si es un error de permisos
+        if (error.code === error.PERMISSION_DENIED) {
+          toast.error('Permiso de ubicación denegado', {
+            duration: 5000,
+            action: {
+              label: 'Configuración',
+              onClick: () => {
+                if ((window as any).cordova && (window as any).cordova.plugins.settings) {
+                  (window as any).cordova.plugins.settings.open('location_source_settings');
                 }
-              );
-            });
-            
-            // Si llegamos aquí, el permiso fue concedido
-            toast.success('Permiso de ubicación concedido');
-            resolve(true);
-          } catch (error: any) {
-            console.error('Error al solicitar permisos de ubicación:', error);
-            let errorMessage = 'No se pudo acceder a la ubicación';
-            
-            if (error.code === error.PERMISSION_DENIED) {
-              errorMessage = 'Permiso de ubicación denegado. Por favor, activa los permisos de ubicación en la configuración de tu dispositivo.';
-              
-              // Intentar abrir la configuración de la aplicación en Android
-              if ((window as any).cordova && (window as any).cordova.plugins.settings) {
-                (window as any).cordova.plugins.settings.open('location_source_settings');
               }
-            } else if (error.code === error.POSITION_UNAVAILABLE) {
-              errorMessage = 'La información de ubicación no está disponible. Asegúrate de tener activado el GPS.';
-            } else if (error.code === error.TIMEOUT) {
-              errorMessage = 'La solicitud de ubicación ha expirado. Intenta de nuevo.';
+            }
+          });
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          toast.error('La información de ubicación no está disponible. Asegúrate de tener activado el GPS.');
+        } else if (error.code === error.TIMEOUT) {
+          toast.error('La solicitud de ubicación ha expirado. Intenta de nuevo.');
+        } else {
+          toast.error('No se pudo acceder a la ubicación');
+        }
+        
+        // Verificar el estado del permiso
+        if (navigator.permissions) {
+          try {
+            const permissionStatus = await navigator.permissions.query({ name: 'geolocation' as PermissionName });
+            console.log('Estado del permiso después del error:', permissionStatus.state);
+            
+            if (permissionStatus.state === 'granted') {
+              resolve(true);
+              return;
             }
             
-            toast.error(errorMessage, {
-              duration: 5000,
-              action: {
-                label: 'Configuración',
-                onClick: () => {
-                  if ((window as any).cordova && (window as any).cordova.plugins.settings) {
-                    (window as any).cordova.plugins.settings.open('location_source_settings');
-                  }
-                }
+            // Configurar un listener para cambios en el permiso
+            const permissionListener = (event: any) => {
+              console.log('Cambio en el estado del permiso (request):', event.target.state);
+              if (event.target.state === 'granted') {
+                toast.success('Permiso de ubicación concedido');
+                resolve(true);
+                permissionStatus.removeEventListener('change', permissionListener);
               }
-            });
+            };
             
+            permissionStatus.addEventListener('change', permissionListener);
+            
+            // Si el permiso está en prompt, devolvemos false para que la interfaz lo maneje
+            resolve(false);
+          } catch (permissionError) {
+            console.error('Error al verificar permisos:', permissionError);
             resolve(false);
           }
-        });
-    } else {
-      // Fallback para navegadores que no soportan la API de Permissions
-      navigator.geolocation.getCurrentPosition(
-        () => resolve(true),
-        (error) => {
-          console.error('Error al verificar la ubicación:', error);
-          toast.error('No se pudo acceder a la ubicación');
+        } else {
           resolve(false);
-        },
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
-    }
+        }
+      },
+      { 
+        enableHighAccuracy: true, 
+        timeout: 10000, 
+        maximumAge: 0 
+      }
+    );
   });
 };
 

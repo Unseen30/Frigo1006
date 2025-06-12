@@ -31,6 +31,7 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
   const [locationError, setLocationError] = useState<string | null>(null);
   const [isCheckingLocation, setIsCheckingLocation] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<PermissionState>('prompt');
+  const [isRequestingPermission, setIsRequestingPermission] = useState(false);
   const watchId = useRef<number | null>(null);
   const lastPosition = useRef<GeolocationPosition | null>(null);
   const totalDistance = useRef<number>(0);
@@ -111,38 +112,46 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
     }
   };
 
-  const verifyLocationStatus = useCallback(async () => {
+  const verifyLocationStatus = useCallback(async (showError = true) => {
     try {
       setIsCheckingLocation(true);
       setLocationError(null);
       
       // Verificar si el navegador soporta geolocalización
       if (!navigator.geolocation) {
-        setLocationError('La geolocalización no es compatible con tu navegador');
-        return false;
+        const errorMsg = 'La geolocalización no es compatible con tu navegador';
+        if (showError) setLocationError(errorMsg);
+        return { hasPermission: false, isEnabled: false, error: errorMsg };
       }
 
       // Verificar permisos de ubicación
       const hasPermission = await checkLocationPermissions();
       if (!hasPermission) {
-        setLocationError('Por favor, permite el acceso a tu ubicación para continuar');
-        setShowPermissionDialog(true);
-        return false;
+        const errorMsg = 'Por favor, permite el acceso a tu ubicación para continuar';
+        if (showError) {
+          setLocationError(errorMsg);
+          setShowPermissionDialog(true);
+        }
+        return { hasPermission: false, isEnabled: false, error: errorMsg };
       }
 
       // Verificar si la ubicación está activada
       const isEnabled = await checkLocationEnabled();
       if (!isEnabled) {
-        setLocationError('La ubicación parece estar desactivada. Actívala para continuar.');
-        setShowPermissionDialog(true);
-        return false;
+        const errorMsg = 'La ubicación parece estar desactivada. Actívala para continuar.';
+        if (showError) {
+          setLocationError(errorMsg);
+          setShowPermissionDialog(true);
+        }
+        return { hasPermission: true, isEnabled: false, error: errorMsg };
       }
 
-      return true;
+      return { hasPermission: true, isEnabled: true, error: null };
     } catch (error) {
       console.error('Error al verificar el estado de la ubicación:', error);
-      setLocationError('No se pudo verificar el estado de la ubicación. Intenta recargar la página.');
-      return false;
+      const errorMsg = 'No se pudo verificar el estado de la ubicación. Intenta recargar la página.';
+      if (showError) setLocationError(errorMsg);
+      return { hasPermission: false, isEnabled: false, error: errorMsg };
     } finally {
       setIsCheckingLocation(false);
     }
@@ -222,23 +231,26 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
 
   const handleEnableLocation = useCallback(async () => {
     try {
+      setIsRequestingPermission(true);
+      setLocationError(null);
+      
+      // Solicitar permisos
       const granted = await requestLocationPermissions();
+      
       if (granted) {
         setPermissionStatus('granted');
         setShowPermissionDialog(false);
         
-        // Esperar un momento para que se cierre el diálogo
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Verificar el estado después de conceder permisos
+        const { isEnabled } = await verifyLocationStatus(false);
         
-        // Iniciar el seguimiento de ubicación
-        await startLocationTracking();
-        
-        // Verificar si el seguimiento se inició correctamente
-        if (tracking) {
+        if (isEnabled) {
+          // Iniciar el seguimiento de ubicación
+          await startLocationTracking();
           toast.success('Seguimiento de ubicación activado');
         } else {
-          setPermissionStatus('denied');
-          setLocationError('No se pudo iniciar el seguimiento de ubicación');
+          setLocationError('Activa la ubicación en la configuración de tu dispositivo');
+          setShowPermissionDialog(true);
         }
       } else {
         setPermissionStatus('denied');
@@ -249,40 +261,30 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
       console.error('Error al solicitar permisos:', error);
       setLocationError('Error al solicitar permisos de ubicación');
       setShowPermissionDialog(true);
+    } finally {
+      setIsRequestingPermission(false);
     }
-  }, [startLocationTracking, tracking]);
+  }, [startLocationTracking, verifyLocationStatus]);
 
   // Verificar permisos al cargar el componente
   useEffect(() => {
     const checkPermissions = async () => {
-      try {
-        const hasPermission = await checkLocationPermissions();
-        setPermissionStatus(hasPermission ? 'granted' : 'denied');
-        
-        if (hasPermission) {
-          const isEnabled = await checkLocationEnabled();
-          if (isEnabled) {
-            // Iniciar el seguimiento si los permisos están habilitados
-            startLocationTracking().catch(error => {
-              console.error('Error al iniciar el seguimiento:', error);
-              setLocationError('Error al iniciar el seguimiento de ubicación');
-            });
-          } else {
-            setLocationError('La ubicación está desactivada en tu dispositivo. Actívala para continuar.');
-            setShowPermissionDialog(true);
-          }
-        } else {
-          setShowPermissionDialog(true);
-        }
-      } catch (error) {
-        console.error('Error al verificar permisos:', error);
-        setLocationError('Error al verificar los permisos de ubicación');
-        setShowPermissionDialog(true);
+      const { hasPermission, isEnabled, error } = await verifyLocationStatus();
+      
+      if (hasPermission && isEnabled) {
+        // Iniciar el seguimiento si los permisos están habilitados
+        startLocationTracking().catch(error => {
+          console.error('Error al iniciar el seguimiento:', error);
+          setLocationError('Error al iniciar el seguimiento de ubicación');
+        });
+      } else if (error) {
+        setLocationError(error);
+        setShowPermissionDialog(!hasPermission || !isEnabled);
       }
     };
 
     checkPermissions();
-  }, []);
+  }, [verifyLocationStatus, startLocationTracking]);
 
   // Manejar el estado de la aplicación (primer plano/segundo plano)
   useEffect(() => {
@@ -335,15 +337,26 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
           <AlertDescription>
             Necesitamos acceso a tu ubicación para realizar el seguimiento del viaje.
           </AlertDescription>
-          <Button 
-            variant="outline" 
-            className="mt-2" 
-            onClick={handleEnableLocation}
-            disabled={isCheckingLocation}
-          >
-            <Compass className="mr-2 h-4 w-4" />
-            {isCheckingLocation ? 'Verificando...' : 'Activar ubicación'}
-          </Button>
+          <div className="flex flex-col space-y-2 mt-2">
+            <Button 
+              variant="outline" 
+              onClick={handleEnableLocation}
+              disabled={isCheckingLocation || isRequestingPermission}
+              className="w-full"
+            >
+              <Compass className="mr-2 h-4 w-4" />
+              {isRequestingPermission ? 'Solicitando permiso...' : isCheckingLocation ? 'Verificando...' : 'Activar ubicación'}
+            </Button>
+            {locationError && (
+              <p className="text-sm text-muted-foreground text-center">
+                {locationError.includes('activa') ? (
+                  <span>Ve a Configuración → Ubicación y activa el GPS</span>
+                ) : (
+                  <span>Necesitamos acceso a tu ubicación para continuar</span>
+                )}
+              </p>
+            )}
+          </div>
         </Alert>
       )}
 
