@@ -1,15 +1,25 @@
 import { Geolocation } from '@capacitor/geolocation';
-import { isPlatform } from '@ionic/react';
+
+// Función para verificar si estamos en un dispositivo móvil
+const isMobile = (): boolean => {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+};
 
 export const checkLocationPermissions = async (): Promise<boolean> => {
   // Para Android/iOS usando Capacitor
-  if (isPlatform('android') || isPlatform('ios')) {
+  if (isMobile()) {
     try {
       const permission = await Geolocation.checkPermissions();
-      if (permission.location === 'granted') return true;
+      if (permission.location === 'granted') {
+        console.log('Permiso de ubicación ya concedido');
+        return true;
+      }
       
+      console.log('Solicitando permiso de ubicación...');
       const request = await Geolocation.requestPermissions();
-      return request.location === 'granted';
+      const granted = request.location === 'granted';
+      console.log(`Permiso de ubicación ${granted ? 'concedido' : 'denegado'}`);
+      return granted;
     } catch (error) {
       console.error('Error verificando permisos de ubicación:', error);
       return false;
@@ -69,8 +79,9 @@ export const checkLocationPermissions = async (): Promise<boolean> => {
 export const requestLocationPermissions = async (): Promise<boolean> => {
   return new Promise((resolve) => {
     if (!navigator.geolocation) {
-      console.error('La geolocalización no está disponible en este navegador');
-      toast.error('La geolocalización no está disponible en este dispositivo');
+      const errorMsg = 'La geolocalización no está disponible en este navegador';
+      console.error(errorMsg);
+      console.log('Error:', errorMsg);
       resolve(false);
       return;
     }
@@ -81,7 +92,7 @@ export const requestLocationPermissions = async (): Promise<boolean> => {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         console.log('Ubicación obtenida correctamente');
-        toast.success('Permiso de ubicación concedido');
+        console.log('Permiso de ubicación concedido');
         resolve(true);
       },
       async (error) => {
@@ -89,23 +100,27 @@ export const requestLocationPermissions = async (): Promise<boolean> => {
         
         // Verificar si es un error de permisos
         if (error.code === error.PERMISSION_DENIED) {
-          toast.error('Permiso de ubicación denegado', {
-            duration: 5000,
-            action: {
-              label: 'Configuración',
-              onClick: () => {
-                if ((window as any).cordova && (window as any).cordova.plugins.settings) {
-                  (window as any).cordova.plugins.settings.open('location_source_settings');
-                }
-              }
-            }
-          });
+          const errorMsg = 'Permiso de ubicación denegado';
+          console.error(errorMsg);
+          console.log('Error:', errorMsg);
+          
+          // Intentar abrir configuración si está disponible
+          if ((window as any).cordova && (window as any).cordova.plugins?.settings) {
+            console.log('Abriendo configuración de ubicación...');
+            (window as any).cordova.plugins.settings.open('location_source_settings');
+          }
         } else if (error.code === error.POSITION_UNAVAILABLE) {
-          toast.error('La información de ubicación no está disponible. Asegúrate de tener activado el GPS.');
+          const errorMsg = 'La información de ubicación no está disponible. Asegúrate de tener activado el GPS.';
+          console.error(errorMsg);
+          console.log('Error:', errorMsg);
         } else if (error.code === error.TIMEOUT) {
-          toast.error('La solicitud de ubicación ha expirado. Intenta de nuevo.');
+          const errorMsg = 'La solicitud de ubicación ha expirado. Intenta de nuevo.';
+          console.error(errorMsg);
+          console.log('Error:', errorMsg);
         } else {
-          toast.error('No se pudo acceder a la ubicación');
+          const errorMsg = 'No se pudo acceder a la ubicación';
+          console.error(errorMsg);
+          console.log('Error:', errorMsg);
         }
         
         // Verificar el estado del permiso
@@ -123,7 +138,7 @@ export const requestLocationPermissions = async (): Promise<boolean> => {
             const permissionListener = (event: any) => {
               console.log('Cambio en el estado del permiso (request):', event.target.state);
               if (event.target.state === 'granted') {
-                toast.success('Permiso de ubicación concedido');
+                console.log('Permiso de ubicación concedido (desde listener)');
                 resolve(true);
                 permissionStatus.removeEventListener('change', permissionListener);
               }

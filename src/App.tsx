@@ -13,6 +13,7 @@ import DriverInfo from "./pages/DriverInfo";
 import CargoRegistration from "./pages/CargoRegistration";
 import ActiveTrip from "./pages/ActiveTrip";
 import TripHistory from "./pages/TripHistory";
+import LocationTester from "./pages/LocationTester";
 
 // Loading component
 const LoadingSpinner = () => (
@@ -70,6 +71,14 @@ const App = () => (
                   </Suspense>
                 </ProtectedRoute>
               }
+            />
+            <Route 
+              path="/location-test" 
+              element={
+                <Suspense fallback={<LoadingSpinner />}>
+                  <LocationTester />
+                </Suspense>
+              } 
             />
           </Routes>
         </Suspense>
