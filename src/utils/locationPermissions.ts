@@ -3,34 +3,27 @@ import { toast } from 'sonner';
 export const checkLocationPermissions = async (): Promise<boolean> => {
   return new Promise((resolve) => {
     if (!navigator.geolocation) {
-      toast.error('La geolocalización no está disponible en este navegador');
+      console.error('La geolocalización no está disponible en este navegador');
       resolve(false);
       return;
     }
 
-    // Verificar permisos usando la API de Permissions si está disponible
     if (navigator.permissions) {
+      // Usar la API de Permissions si está disponible
       navigator.permissions.query({ name: 'geolocation' as PermissionName })
         .then((permissionStatus) => {
           if (permissionStatus.state === 'granted') {
             resolve(true);
-          } else if (permissionStatus.state === 'prompt') {
-            // Si está en modo 'prompt', intentamos obtener la ubicación para activar el diálogo
-            navigator.geolocation.getCurrentPosition(
-              () => resolve(true),
-              () => resolve(false),
-              { enableHighAccuracy: true, timeout: 5000 }
-            );
           } else {
             resolve(false);
           }
         })
         .catch(() => {
-          // Si falla la API de Permissions, intentamos directamente
+          // Fallback para navegadores que no soportan la API de Permissions
           navigator.geolocation.getCurrentPosition(
             () => resolve(true),
             () => resolve(false),
-            { enableHighAccuracy: true, timeout: 5000 }
+            { enableHighAccuracy: true, timeout: 1000 }
           );
         });
     } else {
@@ -38,9 +31,50 @@ export const checkLocationPermissions = async (): Promise<boolean> => {
       navigator.geolocation.getCurrentPosition(
         () => resolve(true),
         () => resolve(false),
-        { enableHighAccuracy: true, timeout: 5000 }
+        { enableHighAccuracy: true, timeout: 1000 }
       );
     }
+  });
+};
+
+export const requestLocationPermissions = async (): Promise<boolean> => {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      console.error('La geolocalización no está disponible en este navegador');
+      resolve(false);
+      return;
+    }
+
+    // Intentar obtener la ubicación para activar el diálogo de permisos
+    navigator.geolocation.getCurrentPosition(
+      () => {
+        // Permiso concedido
+        resolve(true);
+      },
+      (error) => {
+        console.error('Error al solicitar permisos de ubicación:', error);
+        // Mostrar mensaje de error según el código de error
+        let errorMessage = 'No se pudo acceder a la ubicación';
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            errorMessage = 'Permiso de ubicación denegado';
+            break;
+          case error.POSITION_UNAVAILABLE:
+            errorMessage = 'La información de ubicación no está disponible';
+            break;
+          case error.TIMEOUT:
+            errorMessage = 'La solicitud de ubicación ha expirado';
+            break;
+        }
+        toast.error(errorMessage);
+        resolve(false);
+      },
+      { 
+        enableHighAccuracy: true, 
+        timeout: 5000,
+        maximumAge: 0 // No usar caché
+      }
+    );
   });
 };
 

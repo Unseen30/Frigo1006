@@ -2,11 +2,23 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { AlertCircle, MapPin, MapPinOff } from "lucide-react";
-import { checkLocationPermissions, checkLocationEnabled } from "@/utils/locationPermissions";
+import { AlertCircle, MapPin, MapPinOff, Compass } from "lucide-react";
+import { checkLocationPermissions, checkLocationEnabled, requestLocationPermissions } from "@/utils/locationPermissions";
 import { startBackgroundTracking, stopBackgroundTracking } from "@/utils/backgroundLocation";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogDescription, 
+  DialogFooter, 
+  DialogHeader, 
+  DialogTitle 
+} from "@/components/ui/dialog";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
 
 interface LocationTrackerProps {
   tripId: string;
@@ -18,6 +30,7 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
   const [showPermissionDialog, setShowPermissionDialog] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [isCheckingLocation, setIsCheckingLocation] = useState(false);
+  const [permissionStatus, setPermissionStatus] = useState<PermissionState>('prompt');
   const watchId = useRef<number | null>(null);
   const lastPosition = useRef<GeolocationPosition | null>(null);
   const totalDistance = useRef<number>(0);
@@ -207,25 +220,69 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
     }
   }, [tripId, verifyLocationStatus]);
 
-  const handleEnableLocation = async () => {
+  const handleEnableLocation = useCallback(async () => {
     try {
-      setShowPermissionDialog(false);
-      
-      // Esperar un momento para que se cierre el diálogo
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      // Iniciar el seguimiento de ubicación
-      await startLocationTracking();
-      
-      // Mostrar mensaje de éxito si se inicia correctamente
-      if (tracking) {
-        toast.success('Seguimiento de ubicación activado');
+      const granted = await requestLocationPermissions();
+      if (granted) {
+        setPermissionStatus('granted');
+        setShowPermissionDialog(false);
+        
+        // Esperar un momento para que se cierre el diálogo
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        // Iniciar el seguimiento de ubicación
+        await startLocationTracking();
+        
+        // Verificar si el seguimiento se inició correctamente
+        if (tracking) {
+          toast.success('Seguimiento de ubicación activado');
+        } else {
+          setPermissionStatus('denied');
+          setLocationError('No se pudo iniciar el seguimiento de ubicación');
+        }
+      } else {
+        setPermissionStatus('denied');
+        setLocationError('Se requieren permisos de ubicación para continuar');
+        setShowPermissionDialog(true);
       }
     } catch (error) {
-      console.error('Error al intentar habilitar la ubicación:', error);
-      toast.error('No se pudo habilitar la ubicación. Por favor, verifica que los permisos estén habilitados.');
+      console.error('Error al solicitar permisos:', error);
+      setLocationError('Error al solicitar permisos de ubicación');
+      setShowPermissionDialog(true);
     }
-  };
+  }, [startLocationTracking, tracking]);
+
+  // Verificar permisos al cargar el componente
+  useEffect(() => {
+    const checkPermissions = async () => {
+      try {
+        const hasPermission = await checkLocationPermissions();
+        setPermissionStatus(hasPermission ? 'granted' : 'denied');
+        
+        if (hasPermission) {
+          const isEnabled = await checkLocationEnabled();
+          if (isEnabled) {
+            // Iniciar el seguimiento si los permisos están habilitados
+            startLocationTracking().catch(error => {
+              console.error('Error al iniciar el seguimiento:', error);
+              setLocationError('Error al iniciar el seguimiento de ubicación');
+            });
+          } else {
+            setLocationError('La ubicación está desactivada en tu dispositivo. Actívala para continuar.');
+            setShowPermissionDialog(true);
+          }
+        } else {
+          setShowPermissionDialog(true);
+        }
+      } catch (error) {
+        console.error('Error al verificar permisos:', error);
+        setLocationError('Error al verificar los permisos de ubicación');
+        setShowPermissionDialog(true);
+      }
+    };
+
+    checkPermissions();
+  }, []);
 
   // Manejar el estado de la aplicación (primer plano/segundo plano)
   useEffect(() => {
@@ -269,114 +326,60 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
     };
   }, [tripId, startLocationTracking]);
 
-  const startTracking = useCallback(async () => {
-    if (!navigator.geolocation) {
-      setLocationError('La geolocalización no está disponible en este dispositivo');
-      return;
-    }
-
-    // Obtener la posición inicial y distancia acumulada
-    const initializeDistance = async () => {
-      try {
-        const { data: existingPoints, error } = await supabase
-          .from('route_points')
-          .select('latitude, longitude')
-          .eq('trip_id', tripId)
-          .order('timestamp', { ascending: true });
-
-        if (error) throw error;
-
-        if (existingPoints && existingPoints.length > 1) {
-          let accumulatedDistance = 0;
-          
-          for (let i = 1; i < existingPoints.length; i++) {
-            const distance = calculateHaversineDistance(
-              existingPoints[i-1].latitude,
-              existingPoints[i-1].longitude,
-              existingPoints[i].latitude,
-              existingPoints[i].longitude
-            );
-            accumulatedDistance += distance;
-          }
-          
-          totalDistance.current = accumulatedDistance;
-          onDistanceUpdate?.(totalDistance.current);
-          console.log(`Distancia inicial recuperada: ${totalDistance.current.toFixed(2)} km`);
-        }
-      } catch (error) {
-        console.error('Error al recuperar puntos existentes:', error);
-      }
-    };
-
-    await initializeDistance();
-
-    watchId.current = navigator.geolocation.watchPosition(
-      handlePositionUpdate,
-      (error) => {
-        console.error('Error de geolocalización:', error);
-        toast.error('Error al obtener la ubicación');
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 30000 // Permitir ubicaciones de hasta 30 segundos de antigüedad
-      }
-    );
-
-    setTracking(true);
-    toast.success('Seguimiento de ubicación iniciado con cálculo Haversine');
-
-    return () => {
-      if (watchId.current !== null) {
-        navigator.geolocation.clearWatch(watchId.current);
-        watchId.current = null;
-        setTracking(false);
-      }
-    };
-  }, [tripId, handlePositionUpdate, onDistanceUpdate]);
-
   return (
-    <div className="w-full">
-      <div className="flex items-center gap-2 text-sm mb-2">
-        <div className={`p-1.5 rounded-full ${
-          tracking ? 'bg-green-100 text-green-600' : 
-          locationError ? 'bg-red-100 text-red-600' : 
-          'bg-gray-100 text-gray-600'
-        }`}>
-          {tracking ? (
-            <MapPin className="h-4 w-4 animate-pulse" />
-          ) : locationError ? (
-            <MapPinOff className="h-4 w-4" />
-          ) : (
-            <MapPin className="h-4 w-4" />
-          )}
-        </div>
-        <div className="flex-1">
-          <p className="text-sm font-medium">
-            {tracking ? 'Seguimiento activo' : 
-             locationError ? 'Error de ubicación' : 'Seguimiento inactivo'}
-          </p>
-          <p className="text-xs text-gray-500">
-            {tracking ? 'Ubicación en tiempo real activada' : 
-             locationError ? 'No se puede acceder a la ubicación' : 'Esperando activación...'}
-          </p>
-        </div>
-        {totalDistance.current > 0 && (
-          <div className="text-right">
-            <p className="text-sm font-semibold text-primary">
-              {totalDistance.current.toFixed(2)} km
-            </p>
-            <p className="text-xs text-gray-500">Distancia recorrida</p>
-          </div>
-        )}
-      </div>
+    <div className="space-y-4">
+      {permissionStatus !== 'granted' && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Permisos de ubicación requeridos</AlertTitle>
+          <AlertDescription>
+            Necesitamos acceso a tu ubicación para realizar el seguimiento del viaje.
+          </AlertDescription>
+          <Button 
+            variant="outline" 
+            className="mt-2" 
+            onClick={handleEnableLocation}
+            disabled={isCheckingLocation}
+          >
+            <Compass className="mr-2 h-4 w-4" />
+            {isCheckingLocation ? 'Verificando...' : 'Activar ubicación'}
+          </Button>
+        </Alert>
+      )}
 
       {locationError && (
-        <div className="mt-2 p-3 bg-red-50 border border-red-100 rounded-md text-sm text-red-700 flex items-start">
-          <AlertCircle className="h-4 w-4 mr-2 mt-0.5 flex-shrink-0" />
-          <span>{locationError}</span>
-        </div>
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error de ubicación</AlertTitle>
+          <AlertDescription>{locationError}</AlertDescription>
+        </Alert>
       )}
+
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-2">
+          {tracking ? (
+            <>
+              <div className="h-3 w-3 rounded-full bg-green-500 animate-pulse"></div>
+              <span>Seguimiento activo</span>
+            </>
+          ) : (
+            <span>Seguimiento inactivo</span>
+          )}
+        </div>
+        <Button
+          variant={tracking ? "destructive" : "default"}
+          onClick={tracking ? stopBackgroundTracking : startLocationTracking}
+          disabled={isCheckingLocation || permissionStatus !== 'granted'}
+        >
+          {isCheckingLocation ? (
+            "Cargando..."
+          ) : tracking ? (
+            "Detener seguimiento"
+          ) : (
+            "Iniciar seguimiento"
+          )}
+        </Button>
+      </div>
 
       <Dialog open={showPermissionDialog} onOpenChange={setShowPermissionDialog}>
         <DialogContent className="sm:max-w-[425px]">
