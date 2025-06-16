@@ -1,5 +1,6 @@
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import type { JSX } from 'react';
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { AlertCircle, MapPin, MapPinOff, Compass } from "lucide-react";
@@ -25,7 +26,7 @@ interface LocationTrackerProps {
   onDistanceUpdate?: (distance: number) => void;
 }
 
-export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerProps) => {
+export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDistanceUpdate }) => {
   const [tracking, setTracking] = useState(false);
   const [showPermissionDialog, setShowPermissionDialog] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -163,8 +164,12 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
     if (!tripId) return;
     
     try {
+      setLocationError(null); // Limpiar errores previos
       const isReady = await verifyLocationStatus();
-      if (!isReady) return;
+      if (!isReady) {
+        setTracking(false);
+        return;
+      }
 
       if (!navigator.geolocation) {
         setLocationError('La geolocalización no está disponible en este dispositivo');
@@ -187,12 +192,15 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
             errorMessage = 'Permiso de ubicación denegado. Por favor, activa la ubicación en la configuración de tu dispositivo y actualiza la página.';
             setPermissionStatus('denied');
             setShowPermissionDialog(true);
+            setTracking(false); // Asegurarse de que el seguimiento se detenga
             break;
           case error.POSITION_UNAVAILABLE:
             errorMessage = 'La información de ubicación no está disponible. Asegúrate de tener conexión a Internet y el GPS activado.';
+            setTracking(false); // Asegurarse de que el seguimiento se detenga
             break;
           case error.TIMEOUT:
             errorMessage = 'Tiempo de espera agotado al intentar obtener la ubicación. Verifica tu conexión a Internet.';
+            setTracking(false); // Asegurarse de que el seguimiento se detenga
             break;
         }
         
@@ -369,6 +377,16 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
       setTracking(false);
     };
   }, [tripId, startLocationTracking]);
+
+  const stopLocationTracking = useCallback(() => {
+    if (watchId.current !== null) {
+      navigator.geolocation.clearWatch(watchId.current);
+      watchId.current = null;
+    }
+    stopBackgroundTracking();
+    setTracking(false);
+    setLocationError(null); // Limpiar el mensaje de error al detener
+  }, []);
 
   return (
     <div className="space-y-4">
