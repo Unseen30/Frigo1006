@@ -9,16 +9,26 @@ export const checkLocationPermissions = async (): Promise<{granted: boolean, mes
   // Para Android/iOS usando Capacitor
   if (isMobile()) {
     try {
+      console.log('Verificando permisos de ubicación en dispositivo móvil...');
       const permission = await Geolocation.checkPermissions();
+      console.log('Estado actual de los permisos:', permission);
+      
       if (permission.location === 'granted') {
-        console.log('Permiso de ubicación ya concedido');
+        console.log('✅ Permiso de ubicación ya concedido');
         return { granted: true };
       }
       
-      console.log('Solicitando permiso de ubicación...');
+      console.log('🔍 Solicitando permiso de ubicación...');
       const request = await Geolocation.requestPermissions();
+      console.log('Respuesta de la solicitud de permisos:', request);
+      
       const granted = request.location === 'granted';
-      console.log(`Permiso de ubicación ${granted ? 'concedido' : 'denegado'}`);
+      console.log(`Permiso de ubicación ${granted ? '✅ concedido' : '❌ denegado'}`);
+      
+      if (!granted) {
+        console.warn('El usuario denegó los permisos de ubicación');
+      }
+      
       return { 
         granted,
         message: granted ? undefined : 'Se requieren permisos de ubicación para continuar. Por favor, activa los permisos en la configuración de tu dispositivo.'
@@ -33,10 +43,11 @@ export const checkLocationPermissions = async (): Promise<{granted: boolean, mes
   }
   
   // Código para navegadores web
+  console.log('Verificando permisos de ubicación en navegador web...');
   return new Promise((resolve) => {
     if (!navigator.geolocation) {
-      const message = 'La geolocalización no está disponible en este navegador. Por favor, utiliza un navegador compatible.';
-      console.error(message);
+      const message = 'La geolocalización no está disponible en este navegador. Por favor, utiliza un navegador compatible como Chrome, Firefox o Edge.';
+      console.error('❌ ' + message);
       resolve({ granted: false, message });
       return;
     }
@@ -63,12 +74,13 @@ export const checkLocationPermissions = async (): Promise<{granted: boolean, mes
           }
           
           // Si está en 'prompt', configurar listener y forzar el diálogo con getCurrentPosition
-          const permissionListener = (event: PermissionStatusEventMap['change']) => {
-            console.log('Cambio en el estado del permiso:', event.target?.state);
-            if (event.target?.state === 'granted') {
+          const permissionListener = (event: Event) => {
+            const status = event.target as PermissionStatus;
+            console.log('Cambio en el estado del permiso:', status.state);
+            if (status.state === 'granted') {
               resolve({ granted: true });
               permissionStatus.removeEventListener('change', permissionListener);
-            } else if (event.target?.state === 'denied') {
+            } else if (status.state === 'denied') {
               resolve({ 
                 granted: false, 
                 message: 'Se requiere acceso a la ubicación para continuar. Por favor, actualiza los permisos.'
@@ -92,16 +104,19 @@ export const checkLocationPermissions = async (): Promise<{granted: boolean, mes
           );
           
           // Configurar timeout para evitar bloqueos
-          setTimeout(() => {
+          const timeoutId = setTimeout(() => {
+            console.warn('Tiempo de espera agotado para la respuesta de permisos');
             if (!permissionStatus) return;
             permissionStatus.removeEventListener('change', permissionListener);
             if (permissionStatus.state === 'prompt') {
+              const message = 'No se recibió respuesta del diálogo de permisos. Por favor, verifica que hayas respondido al diálogo de ubicación que apareció en tu navegador.';
+              console.warn('⚠️ ' + message);
               resolve({ 
                 granted: false, 
-                message: 'No se recibió respuesta del diálogo de permisos. Por favor, verifica la configuración de tu navegador.'
+                message
               });
             }
-          }, 10000);
+          }, 15000); // Aumentado a 15 segundos para dar más tiempo al usuario
           
         })
         .catch((error) => {
@@ -313,10 +328,10 @@ export const requestLocationSettings = async (): Promise<boolean> => {
   // En navegadores web, no podemos abrir directamente la configuración de ubicación
   // Simulamos el comportamiento solicitando permisos nuevamente
   try {
-    const hasPermission = await checkLocationPermissions();
-    if (hasPermission) {
-      const isEnabled = await checkLocationEnabled();
-      return isEnabled;
+    const { granted } = await checkLocationPermissions();
+    if (granted) {
+      const { enabled } = await checkLocationEnabled();
+      return enabled;
     }
     return false;
   } catch (error) {
