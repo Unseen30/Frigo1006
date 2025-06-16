@@ -119,15 +119,16 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
       
       // Verificar si el navegador soporta geolocalización
       if (!navigator.geolocation) {
-        const errorMsg = 'La geolocalización no es compatible con tu navegador';
+        const errorMsg = 'La geolocalización no es compatible con tu navegador. Por favor, utiliza un navegador moderno.';
         if (showError) setLocationError(errorMsg);
         return { hasPermission: false, isEnabled: false, error: errorMsg };
       }
 
       // Verificar permisos de ubicación
-      const hasPermission = await checkLocationPermissions();
+      const { granted: hasPermission, message: permissionMessage } = await checkLocationPermissions();
+      
       if (!hasPermission) {
-        const errorMsg = 'Por favor, permite el acceso a tu ubicación para continuar';
+        const errorMsg = permissionMessage || 'Por favor, permite el acceso a tu ubicación para continuar';
         if (showError) {
           setLocationError(errorMsg);
           setShowPermissionDialog(true);
@@ -136,9 +137,10 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
       }
 
       // Verificar si la ubicación está activada
-      const isEnabled = await checkLocationEnabled();
+      const { enabled: isEnabled, message: enabledMessage } = await checkLocationEnabled();
+      
       if (!isEnabled) {
-        const errorMsg = 'La ubicación parece estar desactivada. Actívala para continuar.';
+        const errorMsg = enabledMessage || 'La ubicación parece estar desactivada. Actívala para continuar.';
         if (showError) {
           setLocationError(errorMsg);
           setShowPermissionDialog(true);
@@ -149,7 +151,7 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
       return { hasPermission: true, isEnabled: true, error: null };
     } catch (error) {
       console.error('Error al verificar el estado de la ubicación:', error);
-      const errorMsg = 'No se pudo verificar el estado de la ubicación. Intenta recargar la página.';
+      const errorMsg = error instanceof Error ? error.message : 'No se pudo verificar el estado de la ubicación. Intenta recargar la página.';
       if (showError) setLocationError(errorMsg);
       return { hasPermission: false, isEnabled: false, error: errorMsg };
     } finally {
@@ -182,15 +184,27 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
         
         switch(error.code) {
           case error.PERMISSION_DENIED:
-            errorMessage = 'Permiso de ubicación denegado. Por favor, activa la ubicación en la configuración de tu dispositivo.';
+            errorMessage = 'Permiso de ubicación denegado. Por favor, activa la ubicación en la configuración de tu dispositivo y actualiza la página.';
+            setPermissionStatus('denied');
             setShowPermissionDialog(true);
             break;
           case error.POSITION_UNAVAILABLE:
             errorMessage = 'La información de ubicación no está disponible. Asegúrate de tener conexión a Internet y el GPS activado.';
             break;
           case error.TIMEOUT:
-            errorMessage = 'Tiempo de espera agotado al intentar obtener la ubicación.';
+            errorMessage = 'Tiempo de espera agotado al intentar obtener la ubicación. Verifica tu conexión a Internet.';
             break;
+        }
+        
+        // Si el error es de permisos, forzar una verificación de estado
+        if (error.code === error.PERMISSION_DENIED) {
+          verifyLocationStatus().then(({ hasPermission, isEnabled }) => {
+            console.log('Estado de permisos después del error:', { hasPermission, isEnabled });
+            if (hasPermission && isEnabled) {
+              // Si los permisos están bien, intentar reiniciar el seguimiento
+              startLocationTracking();
+            }
+          });
         }
         
         setLocationError(errorMessage);
@@ -235,31 +249,34 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
       setLocationError(null);
       
       // Solicitar permisos
-      const granted = await requestLocationPermissions();
+      const { granted, message } = await requestLocationPermissions();
       
       if (granted) {
         setPermissionStatus('granted');
         setShowPermissionDialog(false);
         
         // Verificar el estado después de conceder permisos
-        const { isEnabled } = await verifyLocationStatus(false);
+        const { isEnabled, error: statusError } = await verifyLocationStatus(false);
         
         if (isEnabled) {
           // Iniciar el seguimiento de ubicación
           await startLocationTracking();
           toast.success('Seguimiento de ubicación activado');
         } else {
-          setLocationError('Activa la ubicación en la configuración de tu dispositivo');
+          const errorMsg = statusError || 'Activa la ubicación en la configuración de tu dispositivo';
+          setLocationError(errorMsg);
           setShowPermissionDialog(true);
         }
       } else {
         setPermissionStatus('denied');
-        setLocationError('Se requieren permisos de ubicación para continuar');
+        const errorMsg = message || 'Se requieren permisos de ubicación para continuar';
+        setLocationError(errorMsg);
         setShowPermissionDialog(true);
       }
     } catch (error) {
       console.error('Error al solicitar permisos:', error);
-      setLocationError('Error al solicitar permisos de ubicación');
+      const errorMsg = error instanceof Error ? error.message : 'Error al solicitar permisos de ubicación';
+      setLocationError(errorMsg);
       setShowPermissionDialog(true);
     } finally {
       setIsRequestingPermission(false);
@@ -269,22 +286,47 @@ export const LocationTracker = ({ tripId, onDistanceUpdate }: LocationTrackerPro
   // Verificar permisos al cargar el componente
   useEffect(() => {
     const checkPermissions = async () => {
-      const { hasPermission, isEnabled, error } = await verifyLocationStatus();
-      
-      if (hasPermission && isEnabled) {
-        // Iniciar el seguimiento si los permisos están habilitados
-        startLocationTracking().catch(error => {
-          console.error('Error al iniciar el seguimiento:', error);
-          setLocationError('Error al iniciar el seguimiento de ubicación');
-        });
-      } else if (error) {
-        setLocationError(error);
-        setShowPermissionDialog(!hasPermission || !isEnabled);
+      try {
+        console.log('🔍 Verificando permisos de ubicación...');
+        const { hasPermission, isEnabled, error } = await verifyLocationStatus();
+        
+        console.log('✅ Resultado de verificación de permisos:', { hasPermission, isEnabled, error });
+        
+        if (hasPermission && isEnabled) {
+          console.log('🚀 Permisos y ubicación activados, iniciando seguimiento...');
+          // Iniciar el seguimiento si los permisos están habilitados
+          await startLocationTracking();
+          console.log('📍 Seguimiento de ubicación iniciado correctamente');
+        } else if (error) {
+          console.warn('⚠️ Error en la verificación de permisos:', error);
+          setLocationError(error);
+          setShowPermissionDialog(!hasPermission || !isEnabled);
+        }
+      } catch (error) {
+        console.error('❌ Error en checkPermissions:', error);
+        const errorMsg = error instanceof Error ? error.message : 'Error al verificar los permisos de ubicación';
+        setLocationError(errorMsg);
+        setShowPermissionDialog(true);
       }
     };
 
     checkPermissions();
-  }, [verifyLocationStatus, startLocationTracking]);
+    
+    // Verificar periódicamente el estado de los permisos
+    const intervalId = setInterval(() => {
+      if (navigator.permissions) {
+        navigator.permissions.query({ name: 'geolocation' as PermissionName }).then(permissionStatus => {
+          console.log('Estado actual del permiso:', permissionStatus.state);
+          if (permissionStatus.state === 'granted' && !tracking) {
+            // Si los permisos se otorgan después de negarse, intentar iniciar el seguimiento
+            startLocationTracking().catch(console.error);
+          }
+        });
+      }
+    }, 5000);
+    
+    return () => clearInterval(intervalId);
+  }, [verifyLocationStatus, startLocationTracking, tracking]);
 
   // Manejar el estado de la aplicación (primer plano/segundo plano)
   useEffect(() => {

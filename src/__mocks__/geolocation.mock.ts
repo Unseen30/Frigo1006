@@ -182,30 +182,53 @@ export class MockGeolocation {
 export const mockGeolocation = new MockGeolocation();
 
 // Configurar el mock en el objeto global
-if (typeof window !== 'undefined') {
-  // @ts-ignore
-  window.navigator.geolocation = mockGeolocation;
+if (typeof window !== 'undefined' && (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development')) {
+  // Solo aplicar el mock en entorno de pruebas
+  
+  // Primero, intentamos con Object.defineProperty
+  try {
+    Object.defineProperty(navigator, 'geolocation', {
+      value: mockGeolocation,
+      configurable: true,
+      writable: true
+    });
+  } catch (error) {
+    // Si falla, intentamos con la asignación directa
+    console.warn('No se pudo definir la propiedad geolocation con defineProperty, intentando asignación directa');
+    try {
+      // @ts-ignore
+      navigator.geolocation = mockGeolocation;
+    } catch (e) {
+      console.error('No se pudo asignar el mock de geolocation:', e);
+    }
+  }
   
   // Mock para la API de permisos
-  Object.defineProperty(navigator, 'permissions', {
-    value: {
-      query: async (permissionDesc: { name: string }) => {
-        console.log(`Permiso consultado: ${permissionDesc.name}`);
-        return {
-          name: permissionDesc.name,
-          state: mockGeolocation.permissionState,
-          onchange: null,
-          addEventListener: (type: string, listener: EventListener) => {
-            console.log(`Added ${type} listener for permission`);
-          },
-          removeEventListener: (type: string, listener: EventListener) => {
-            console.log(`Removed ${type} listener for permission`);
-          },
-        };
-      },
-    },
-    configurable: true,
-  });
+  if (!navigator.permissions) {
+    try {
+      Object.defineProperty(navigator, 'permissions', {
+        value: {
+          query: async (permissionDesc: { name: string }) => {
+            return {
+              name: permissionDesc.name,
+              state: mockGeolocation.permissionState,
+              onchange: null,
+              addEventListener: (type: string, listener: EventListener) => {
+                console.log(`Added ${type} listener for permission`);
+              },
+              removeEventListener: (type: string, listener: EventListener) => {
+                console.log(`Removed ${type} listener for permission`);
+              },
+              dispatchEvent: (event: Event) => true
+            };
+          }
+        },
+        configurable: true,
+      });
+    } catch (error) {
+      console.warn('No se pudo configurar el mock de permisos:', error);
+    }
+  }
 }
 
 export default mockGeolocation;
