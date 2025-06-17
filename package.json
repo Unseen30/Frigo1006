@@ -80,6 +80,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",
+    "@faker-js/faker": "^9.8.0",
     "@supabase/supabase-js": "^2.49.10",
     "@tailwindcss/typography": "^0.5.15",
     "@types/node": "^22.15.30",

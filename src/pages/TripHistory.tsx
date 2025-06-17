@@ -53,28 +53,28 @@ const TripHistory = () => {
   const { data: isAdmin = false } = useQuery({
     queryKey: ['user-role', currentUser?.id],
     queryFn: async () => {
-      if (!currentUser?.id) return false;
+      if (!currentUser?.email) return false;
       
       try {
         const { data, error } = await supabase
           .from('drivers')
           .select('*')
-          .eq('id', currentUser.id)
-          .single<DriverDB>();
+          .eq('email', currentUser.email)
+          .single<{ is_admin?: boolean }>();
         
         if (error) {
-          console.error('Error al obtener datos del conductor:', error);
+          console.error('Error al verificar rol de administrador:', error);
           return false;
         }
         
-        // Verificar si el campo is_admin existe, si no, asumir false
-        return data?.is_admin || false;
+        // Verificar explícitamente si es administrador
+        return data?.is_admin === true;
       } catch (error) {
         console.error('Error inesperado al verificar rol de administrador:', error);
         return false;
       }
     },
-    enabled: !!currentUser?.id,
+    enabled: !!currentUser?.email,
     initialData: false
   });
 
@@ -105,6 +105,8 @@ const TripHistory = () => {
       const filteredTrips = isAdmin 
         ? tripsData 
         : tripsData.filter(trip => trip.driver_id === currentUser?.id);
+      
+      console.log(`Filtrando viajes - es admin: ${isAdmin}, viajes encontrados: ${filteredTrips.length}`);
 
       // Obtenemos los IDs únicos de conductores y camiones
       const driverIds = [...new Set(filteredTrips.map(trip => trip.driver_id))];
