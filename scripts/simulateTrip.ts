@@ -114,45 +114,42 @@ function generateRoutePoints(
 }
 
 // Función para obtener una ruta real usando OpenRouteService
-async function getRoute(
-  start: [number, number],
-  end: [number, number],
-  pointsCount: number = 30
-): Promise<RoutePoint[]> {
+async function getRoute(start: [number, number], end: [number, number], pointsCount: number = 30): Promise<RoutePoint[]> {
   try {
-    console.log(`Solicitando ruta de [${start[0]}, ${start[1]}] a [${end[0]}, ${end[1]}]`);
+    console.log('Obteniendo ruta de OpenRouteService...');
+    console.log(`Desde: [${start[1]}, ${start[0]}]`);
+    console.log(`Hasta: [${end[1]}, ${end[0]}]`);
     
+    // Construir la URL de la API de OpenRouteService con el formato correcto [lon,lat]
     const response = await fetch(
       `${ORS_API_URL}/directions/driving-car?api_key=${ORS_API_KEY}&start=${start[0]},${start[1]}&end=${end[0]},${end[1]}`,
       {
         method: 'GET',
         headers: {
-          'Accept': 'application/json, application/geo+json',
+          'Accept': 'application/geo+json',
+          'Content-Type': 'application/json'
         }
       }
     );
 
     if (!response.ok) {
-      throw new Error(`Error en la respuesta de OpenRouteService: ${response.statusText}`);
+      const errorText = await response.text();
+      console.error('Error en la respuesta de OpenRouteService:', response.status, response.statusText);
+      console.error('Detalles del error:', errorText);
+      throw new Error(`Error en la respuesta de OpenRouteService: ${response.status} ${response.statusText}`);
     }
 
     const data = await response.json();
     
-    if (!data.features || !data.features[0]?.geometry?.coordinates) {
-      throw new Error('Formato de respuesta inesperado de OpenRouteService');
+    if (!data.features || data.features.length === 0) {
+      throw new Error('No se encontraron características de ruta en la respuesta');
     }
-
-    const coordinates = data.features[0].geometry.coordinates as [number, number][];
     
-    // Si necesitamos reducir el número de puntos
-    if (pointsCount < coordinates.length) {
-      const step = Math.floor(coordinates.length / pointsCount);
-      return coordinates
-        .filter((_, i) => i % step === 0)
-        .map(([lng, lat]) => ({
-          latitude: lat,
-          longitude: lng,
-        }));
+    // Extraer los puntos de la ruta
+    const coordinates = data.features[0].geometry.coordinates;
+    
+    if (!coordinates || coordinates.length < 2) {
+      throw new Error('La ruta no contiene suficientes puntos');
     }
 
     return coordinates.map(([lng, lat]) => ({
@@ -192,74 +189,129 @@ async function simulateTrip(tripId: string) {
     console.log(`Viaje encontrado: ${trip.origin} → ${trip.destination}`);
     
     // 2. Generar puntos de ruta usando OpenRouteService
-    // Coordenadas de ejemplo en Uruguay (Montevideo y alrededores)
-    const startPoint: [number, number] = [
-      -56.1645 + (Math.random() * 0.5 - 0.25), // Longitud
-      -34.9011 + (Math.random() * 0.5 - 0.25)  // Latitud
+    // Coordenadas reales en Uruguay
+    const locations = [
+      { name: 'Montevideo', coords: [-56.1645, -34.9011] },
+      { name: 'Punta del Este', coords: [-54.95, -34.9667] },
+      { name: 'Colonia del Sacramento', coords: [-57.85, -34.4833] },
+      { name: 'Paysandú', coords: [-58.0758, -32.3214] },
+      { name: 'Salto', coords: [-57.9667, -31.3833] },
+      { name: 'Melo', coords: [-54.1833, -32.3667] },
+      { name: 'Rivera', coords: [-55.5508, -30.9053] },
+      { name: 'Artigas', coords: [-56.4667, -30.4] },
+      { name: 'Tacuarembó', coords: [-55.9833, -31.7333] },
+      { name: 'Durazno', coords: [-56.5167, -33.3833] }
     ];
     
-    const endPoint: [number, number] = [
-      startPoint[0] + (Math.random() * 0.3 - 0.15), // Hasta ~15km de distancia
-      startPoint[1] + (Math.random() * 0.3 - 0.15)
-    ];
+    // Seleccionar dos ubicaciones aleatorias diferentes
+    let startIdx, endIdx;
+    do {
+      startIdx = Math.floor(Math.random() * locations.length);
+      endIdx = Math.floor(Math.random() * locations.length);
+    } while (startIdx === endIdx);
     
+    const startPoint = locations[startIdx].coords as [number, number];
+    const endPoint = locations[endIdx].coords as [number, number];
+    
+    console.log(`Ruta: ${locations[startIdx].name} → ${locations[endIdx].name}`);
     console.log('Obteniendo ruta de OpenRouteService...');
+    
+    // 3. Obtener la ruta de OpenRouteService
     const routePoints = await getRoute(startPoint, endPoint, 50);
+    
+    if (routePoints.length === 0) {
+      throw new Error('No se pudieron generar puntos de ruta');
+    }
+    
     console.log(`Ruta obtenida con ${routePoints.length} puntos`);
     
-    console.log(`Generados ${routePoints.length} puntos de ruta`);
+    // 4. Actualizar el viaje con las coordenadas de inicio y fin
+    const { error: updateError } = await supabase
+      .from('trips')
+      .update({
+        start_location: { type: 'Point', coordinates: [startPoint[0], startPoint[1]] },
+        end_location: { type: 'Point', coordinates: [endPoint[0], endPoint[1]] },
+        origin: locations[startIdx].name,
+        destination: locations[endIdx].name,
+        status: 'active' // Marcamos el viaje como activo
+      })
+      .eq('id', tripId);
     
-    // 3. Insertar los puntos de ruta en la base de datos
-    const timestamp = new Date(trip.start_time || new Date().toISOString());
-    const pointsToInsert: Omit<RoutePointDB, 'id'>[] = routePoints.map((point, index) => ({
-      trip_id: tripId,
-      latitude: point.latitude,
-      longitude: point.longitude,
-      timestamp: new Date(timestamp.getTime() + index * 60000).toISOString() // 1 minuto entre puntos
-    }));
+    if (updateError) {
+      throw new Error(`Error al actualizar el viaje: ${updateError.message}`);
+    }
     
-    const { error: insertError } = await supabase
-      .from('route_points')
-      .insert(pointsToInsert);
+    // 5. Insertar los puntos de ruta en la base de datos
+    console.log('Insertando puntos de ruta en la base de datos...');
+    const now = new Date();
+    const startTime = new Date(now.getTime() - 3600000); // Hace 1 hora
     
-    if (insertError) {
-      console.error('Error al insertar puntos de ruta:', insertError);
-      return;
+    const pointsToInsert = routePoints.map((point, index) => {
+      // Distribuir los puntos a lo largo de la última hora
+      const pointTime = new Date(startTime.getTime() + (index * 3600000 / routePoints.length));
+      
+      return {
+        trip_id: tripId,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        timestamp: pointTime.toISOString(),
+        accuracy: 10 + Math.random() * 5, // Precisión simulada entre 10-15 metros
+        speed: 20 + Math.random() * 60, // Velocidad simulada entre 20-80 km/h
+        heading: Math.random() * 360 // Dirección simulada
+      };
+    });
+    
+    // Insertar en lotes para evitar sobrecargar la base de datos
+    const batchSize = 50;
+    for (let i = 0; i < pointsToInsert.length; i += batchSize) {
+      const batch = pointsToInsert.slice(i, i + batchSize);
+      const { error: insertError } = await supabase
+        .from('route_points')
+        .insert(batch);
+      
+      if (insertError) {
+        throw new Error(`Error al insertar lote de puntos de ruta: ${insertError.message}`);
+      }
+      
+      console.log(`  Insertado lote ${Math.floor(i / batchSize) + 1}/${Math.ceil(pointsToInsert.length / batchSize)}`);
     }
     
     console.log(`Se insertaron ${pointsToInsert.length} puntos de ruta exitosamente`);
     
-    // 4. Actualizar la distancia del viaje (aproximada)
-    // Calcular distancia total de la ruta
+    // 6. Calcular y actualizar la distancia total del viaje
     let distanceKm = 0;
     if (routePoints.length > 1) {
       for (let i = 1; i < routePoints.length; i++) {
         const p1 = routePoints[i - 1];
         const p2 = routePoints[i];
         distanceKm += calculateDistance(
-          p1.latitude, p1.longitude,
-          p2.latitude, p2.longitude
+          p1.latitude, 
+          p1.longitude,
+          p2.latitude, 
+          p2.longitude
         );
       }
-    } else if (routePoints.length === 1) {
-      // Si solo hay un punto, usamos la distancia al punto final
-      distanceKm = calculateDistance(
-        routePoints[0].latitude, 
-        routePoints[0].longitude,
-        endPoint[1], 
-        endPoint[0]
-      );
     }
     
+    // Redondear a 2 decimales
+    const roundedDistance = Math.round(distanceKm * 100) / 100;
+    
+    // Actualizar el viaje con la distancia y marcarlo como completado
     await supabase
       .from('trips')
-      .update({ distance: parseFloat(distanceKm.toFixed(2)) })
+      .update({ 
+        distance: roundedDistance,
+        status: 'completed',
+        end_time: now.toISOString()
+      })
       .eq('id', tripId);
     
-    console.log(`Distancia del viaje actualizada a ${distanceKm.toFixed(2)} km`);
+    console.log(`Distancia del viaje: ${roundedDistance} km`);
+    console.log('Viaje simulado exitosamente!');
     
   } catch (error) {
     console.error('Error en la simulación del viaje:', error);
+    throw error;
   }
 }
 

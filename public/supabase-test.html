@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prueba de Conexión a Supabase</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    .container {
+      background-color: #f5f5f5;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .success {
+      color: green;
+      font-weight: bold;
+    }
+    .error {
+      color: red;
+      font-weight: bold;
+    }
+    #output {
+      margin-top: 20px;
+      white-space: pre-wrap;
+      background-color: #fff;
+      border: 1px solid #ddd;
+      padding: 15px;
+      border-radius: 4px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 16px;
+      margin: 4px 2px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    button:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <h1>Prueba de Conexión a Supabase</h1>
+  
+  <div class="container">
+    <h2>Configuración</h2>
+    <p><strong>URL de Supabase:</strong> <span id="supabaseUrl">Cargando...</span></p>
+    <p><strong>Clave anónima:</strong> <span id="supabaseKey">Cargando...</span></p>
+    <p id="configStatus">Verificando configuración...</p>
+  </div>
+  
+  <div class="container">
+    <h2>Acciones</h2>
+    <button id="listTripsBtn" disabled>Listar Últimos 5 Viajes</button>
+    <button id="createTestTripBtn" disabled>Crear Viaje de Prueba</button>
+  </div>
+  
+  <div class="container">
+    <h2>Resultados</h2>
+    <div id="output">Esperando acción...</div>
+  </div>
+
+  <script>
+    // Obtener elementos del DOM
+    const supabaseUrlEl = document.getElementById('supabaseUrl');
+    const supabaseKeyEl = document.getElementById('supabaseKey');
+    const configStatusEl = document.getElementById('configStatus');
+    const listTripsBtn = document.getElementById('listTripsBtn');
+    const createTestTripBtn = document.getElementById('createTestTripBtn');
+    const outputEl = document.getElementById('output');
+    
+    // Configuración de Supabase
+    const supabaseUrl = 'https://ztahumjvgedfnukdfxjn.supabase.co';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0YWh1bWp2Z2VkZm51a2RmeGpuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTc0Nzg5NDUsImV4cCI6MjAzMzA1NDk0NX0.7QJ3g3h3zqjq9jZRlY5Zvq5ZQ5ZQ5ZQ5ZQ5ZQ5ZQ5ZQ';
+    
+    // Mostrar configuración
+    supabaseUrlEl.textContent = supabaseUrl;
+    supabaseKeyEl.textContent = supabaseKey ? `***${supabaseKey.slice(-4)}` : 'No definida';
+    
+    // Inicializar Supabase
+    const supabase = supabase.createClient(supabaseUrl, supabaseKey);
+    
+    // Función para mostrar mensajes en el área de salida
+    function log(message, isError = false) {
+      const timestamp = new Date().toLocaleTimeString();
+      const logEntry = document.createElement('div');
+      logEntry.innerHTML = `<span style="color: ${isError ? 'red' : 'black'}"><strong>[${timestamp}]</strong> ${message}</span>`;
+      outputEl.prepend(logEntry);
+      console.log(`[${timestamp}] ${message}`);
+    }
+    
+    // Función para habilitar/deshabilitar botones
+    function setButtonsEnabled(enabled) {
+      listTripsBtn.disabled = !enabled;
+      createTestTripBtn.disabled = !enabled;
+    }
+    
+    // Función para listar viajes
+    async function listTrips() {
+      try {
+        setButtonsEnabled(false);
+        log('Obteniendo los últimos 5 viajes...');
+        
+        const { data, error } = await supabase
+          .from('trips')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(5);
+        
+        if (error) {
+          throw error;
+        }
+        
+        if (!data || data.length === 0) {
+          log('No se encontraron viajes.');
+          return;
+        }
+        
+        log(`Se encontraron ${data.length} viajes:`);
+        data.forEach((trip, index) => {
+          log(`\n--- Viaje #${index + 1} ---`);
+          log(`ID: ${trip.id}`);
+          log(`Origen: ${trip.origin || 'N/A'}`);
+          log(`Destino: ${trip.destination || 'N/A'}`);
+          log(`Estado: ${trip.status || 'N/A'}`);
+          log(`Distancia: ${trip.distance || 0} km`);
+          log(`Creado: ${new Date(trip.created_at).toLocaleString()}`);
+        });
+        
+      } catch (error) {
+        log(`Error al obtener viajes: ${error.message}`, true);
+        console.error('Error detallado:', error);
+      } finally {
+        setButtonsEnabled(true);
+      }
+    }
+    
+    // Función para crear un viaje de prueba
+    async function createTestTrip() {
+      try {
+        setButtonsEnabled(false);
+        log('Creando viaje de prueba...');
+        
+        const testTrip = {
+          driver_id: 'test-driver',
+          vehicle_id: 'test-vehicle',
+          origin: 'Montevideo (Prueba Web)',
+          destination: 'Punta del Este (Prueba Web)',
+          status: 'active',
+          start_time: new Date().toISOString(),
+          cargo_description: 'Paquete de prueba desde la web',
+          cargo_weight: 15,
+          distance: 120 // km
+        };
+        
+        const { data, error } = await supabase
+          .from('trips')
+          .insert([testTrip])
+          .select();
+        
+        if (error) {
+          throw error;
+        }
+        
+        log('✅ Viaje de prueba creado exitosamente:');
+        log(JSON.stringify(data[0], null, 2));
+        
+      } catch (error) {
+        log(`Error al crear viaje de prueba: ${error.message}`, true);
+        console.error('Error detallado:', error);
+      } finally {
+        setButtonsEnabled(true);
+      }
+    }
+    
+    // Configurar manejadores de eventos
+    listTripsBtn.addEventListener('click', listTrips);
+    createTestTripBtn.addEventListener('click', createTestTrip);
+    
+    // Verificar conexión inicial
+    (async () => {
+      try {
+        log('Verificando conexión con Supabase...');
+        
+        // Hacer una consulta simple para verificar la conexión
+        const { data, error } = await supabase
+          .from('trips')
+          .select('*')
+          .limit(1);
+        
+        if (error) {
+          throw error;
+        }
+        
+        configStatusEl.innerHTML = '<span class="success">✅ Conexión exitosa con Supabase</span>';
+        setButtonsEnabled(true);
+        log('Conexión exitosa. Puedes realizar acciones usando los botones superiores.');
+        
+      } catch (error) {
+        configStatusEl.innerHTML = '<span class="error">❌ Error al conectar con Supabase</span>';
+        log(`Error al conectar con Supabase: ${error.message}`, true);
+        console.error('Error detallado:', error);
+      }
+    })();
+  </script>
+</body>
+</html>
