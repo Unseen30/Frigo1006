@@ -1,4 +1,9 @@
 import { supabase } from '@/integrations/supabase/client';
+import { saveRoutePoints, getRoutePoints, initDB as initRouteCache } from './routeCache';
+import { reverseGeocode } from '@/services/geocoding'; 
+
+// Tiempo en milisegundos entre sincronizaciones con el servidor (5 minutos)
+const SYNC_INTERVAL = 5 * 60 * 1000; 
 
 // Extender el tipo ServiceWorkerRegistration para incluir la propiedad sync
 declare global {
@@ -14,6 +19,7 @@ let watchId: number | null = null;
 let lastPosition: GeolocationPosition | null = null;
 let totalDistance = 0;
 let isTracking = false;
+let lastSyncTime = 0; // Tiempo de la última sincronización con el servidor
 
 // Función para calcular la distancia entre dos puntos GPS
 const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -34,7 +40,9 @@ const toRadians = (degrees: number): number => {
   return degrees * (Math.PI / 180);
 };
 
-export const startBackgroundTracking = (tripId: string) => {
+export const startBackgroundTracking = async (tripId: string) => {
+  // Inicializar caché
+  await initRouteCache();
   if (!('serviceWorker' in navigator) || !('SyncManager' in window)) {
     console.warn('Service Worker o Background Sync no están soportados en este navegador');
     return false;
@@ -85,13 +93,73 @@ export const stopBackgroundTracking = () => {
   isTracking = false;
 };
 
-const handlePositionUpdate = async (position: GeolocationPosition, tripId: string) => {
+// Sincronizar puntos en caché con el servidor
+export const syncCachedPoints = async (tripId: string) => {
+  try {
+    const points = await getRoutePoints(tripId);
+    if (points.length === 0) return;
+    
+    console.log(`[Background] Sincronizando ${points.length} puntos con el servidor...`);
+    
+    // Insertar puntos en lote
+    const { error } = await supabase
+      .from('route_points')
+      .insert(points.map(p => ({
+        trip_id: tripId,
+        latitude: p.latitude,
+        longitude: p.longitude,
+        accuracy: p.accuracy,
+        timestamp: p.timestamp
+      })));
+    
+    if (error) throw error;
+    
+    console.log(`[Background] ${points.length} puntos sincronizados correctamente`);
+    lastSyncTime = Date.now();
+    return points.length;
+  } catch (error) {
+    console.error('[Background] Error al sincronizar puntos:', error);
+    throw error;
+  }
+};
+
+export const handlePositionUpdate = async (position: GeolocationPosition, tripId: string) => {
   const { latitude, longitude, accuracy } = position.coords;
+  const timestamp = new Date().toISOString();
   
-  // Filtrar lecturas con baja precisión
+  // Filtrar lecturas con baja precisión (más de 50 metros de error)
   if (accuracy > 50) {
-    console.log('Posición descartada por baja precisión:', accuracy, 'metros');
+    console.log(`[Background] Posición descartada por baja precisión: ${accuracy}m`);
     return;
+  }
+  
+  // Guardar en caché local
+  try {
+    await saveRoutePoints(tripId, [{
+      latitude,
+      longitude,
+      timestamp,
+      accuracy
+    }]);
+    
+    // Sincronizar con el servidor periódicamente
+    const now = Date.now();
+    if (now - lastSyncTime > SYNC_INTERVAL) {
+      await syncCachedPoints(tripId);
+    }
+    
+    // Intentar geocodificación inversa para identificar la calle
+    try {
+      const address = await reverseGeocode(latitude, longitude);
+      if (address?.street) {
+        // Aquí podrías guardar la calle en caché si es necesario
+        console.log(`[Background] Calle detectada: ${address.street}`);
+      }
+    } catch (geocodeError) {
+      console.warn('[Background] No se pudo obtener la dirección:', geocodeError);
+    }
+  } catch (cacheError) {
+    console.error('[Background] Error al guardar en caché:', cacheError);
   }
 
   try {

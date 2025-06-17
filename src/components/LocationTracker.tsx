@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { AlertCircle, MapPin, MapPinOff, Compass } from "lucide-react";
 import { checkLocationPermissions, checkLocationEnabled, requestLocationPermissions } from "@/utils/locationPermissions";
 import { startBackgroundTracking, stopBackgroundTracking } from "@/utils/backgroundLocation";
+import { saveRoutePoints, getRoutePoints, initDB as initRouteCache, saveStreet } from "@/utils/routeCache";
+import { reverseGeocode } from "@/services/geocoding";
 import { Button } from "@/components/ui/button";
 import { 
   Dialog, 
@@ -59,11 +61,38 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
 
   const handlePositionUpdate = async (position: GeolocationPosition) => {
     const { latitude, longitude, accuracy } = position.coords;
+    const timestamp = new Date().toISOString();
     
     // Filtrar lecturas con baja precisión (más de 50 metros de error)
     if (accuracy > 50) {
       console.log(`Posición descartada por baja precisión: ${accuracy}m`);
       return;
+    }
+
+    // Guardar en caché local
+    try {
+      await saveRoutePoints(tripId, [{
+        latitude,
+        longitude,
+        timestamp,
+        accuracy
+      }]);
+
+      // Intentar geocodificación inversa para identificar la calle
+      try {
+        const address = await reverseGeocode(latitude, longitude);
+        if (address?.street) {
+          await saveStreet(
+            `${address.street}-${address.city || ''}`,
+            address.street,
+            [{ latitude, longitude }]
+          );
+        }
+      } catch (geocodeError) {
+        console.warn('No se pudo obtener la dirección:', geocodeError);
+      }
+    } catch (cacheError) {
+      console.error('Error al guardar en caché:', cacheError);
     }
     
     try {
@@ -364,6 +393,37 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
       permissionChecked.current = true;
     }
 
+    // Inicializar la caché de rutas al montar
+    const init = async () => {
+      try {
+        await initRouteCache();
+        // Cargar puntos de ruta guardados si existen
+        const savedPoints = await getRoutePoints(tripId);
+        if (savedPoints.length > 0) {
+          // Actualizar la distancia total basada en los puntos guardados
+          let distance = 0;
+          for (let i = 1; i < savedPoints.length; i++) {
+            const prev = savedPoints[i - 1];
+            const curr = savedPoints[i];
+            distance += calculateHaversineDistance(
+              prev.latitude,
+              prev.longitude,
+              curr.latitude,
+              curr.longitude
+            );
+          }
+          totalDistance.current = distance;
+          if (onDistanceUpdate) {
+            onDistanceUpdate(totalDistance.current);
+          }
+        }
+      } catch (error) {
+        console.error('Error al inicializar la caché de rutas:', error);
+      }
+    };
+    
+    init();
+
     // Limpiar al desmontar
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -376,7 +436,7 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
       stopBackgroundTracking();
       setTracking(false);
     };
-  }, [tripId, startLocationTracking]);
+  }, [tripId, startLocationTracking, onDistanceUpdate]);
 
   const stopLocationTracking = useCallback(() => {
     if (watchId.current !== null) {

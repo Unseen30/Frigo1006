@@ -4,14 +4,29 @@ import { toast } from "sonner";
 import * as L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-interface MapViewProps {
-  className?: string;
+interface RoutePoint {
+  latitude: number;
+  longitude: number;
+  timestamp: string;
+  accuracy?: number;
 }
 
-const MapView = ({ className = "" }: MapViewProps) => {
+interface MapViewProps {
+  className?: string;
+  routePoints?: RoutePoint[];
+  currentPosition?: { lat: number; lng: number } | null;
+}
+
+const MapView = ({ 
+  className = "", 
+  routePoints = [], 
+  currentPosition = null 
+}: MapViewProps) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const [locationPermission, setLocationPermission] = useState<PermissionState | null>(null);
   const [map, setMap] = useState<L.Map | null>(null);
+  const [routeLayer, setRouteLayer] = useState<L.Polyline | null>(null);
+  const [marker, setMarker] = useState<L.Marker | null>(null);
 
   // Coordenadas centrales de Uruguay (aproximadamente)
   const URUGUAY_CENTER: [number, number] = [-32.8755548, -56.0201525];
@@ -47,73 +62,143 @@ const MapView = ({ className = "" }: MapViewProps) => {
     }
   };
 
+  // Inicializar el mapa
   useEffect(() => {
-    const initializeMap = async () => {
-      if (!mapRef.current) return;
+    if (!mapRef.current || map) return;
 
-      const hasPermission = await requestLocationPermission();
-      
-      try {
-        console.log("Inicializando mapa con Leaflet...");
-        
-        // Crear el mapa con OpenStreetMap
-        const leafletMap = L.map(mapRef.current, {
-          center: URUGUAY_CENTER,
-          zoom: 7,
-          minZoom: 6,
-          maxZoom: 18,
-          maxBounds: [
-            [-34.973436, -58.442722], // Southwest coordinates
-            [-30.082224, -53.073925]  // Northeast coordinates
-          ],
-          maxBoundsViscosity: 1.0
-        });
+    const newMap = L.map(mapRef.current, {
+      center: URUGUAY_CENTER,
+      zoom: 15,
+      minZoom: 6,
+      maxZoom: 19,
+      maxBounds: [
+        [-34.973436, -58.442722], // Southwest coordinates
+        [-30.082224, -53.073925]  // Northeast coordinates
+      ],
+      maxBoundsViscosity: 1.0
+    });
 
-        // Agregar capa de OpenStreetMap
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          attribution: '© OpenStreetMap contributors',
-          maxZoom: 18,
-        }).addTo(leafletMap);
+    // Estilo de mapa con calles
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors',
+      maxZoom: 19,
+    }).addTo(newMap);
 
-        console.log("Mapa inicializado correctamente");
-        setMap(leafletMap);
+    setMap(newMap);
 
-        if (hasPermission && navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(
-            (position) => {
-              const userLocation: [number, number] = [
-                position.coords.latitude,
-                position.coords.longitude,
-              ];
-              
-              leafletMap.setView(userLocation, 15);
-              
-              // Agregar marcador de ubicación actual
-              L.marker(userLocation)
-                .addTo(leafletMap)
-                .bindPopup("Tu ubicación")
-                .openPopup();
-            },
-            () => {
-              console.error("Error: No se pudo obtener la ubicación.");
-              toast.error("No se pudo obtener tu ubicación");
-            }
-          );
-        }
-      } catch (error) {
-        console.error("Error loading map:", error);
-        toast.error("Error al cargar el mapa");
-      }
-    };
-
-    initializeMap();
-
-    // Cleanup function
     return () => {
-      if (map) {
-        map.remove();
+      if (routeLayer) {
+        newMap.removeLayer(routeLayer);
       }
+      if (marker) {
+        newMap.removeLayer(marker);
+      }
+      newMap.remove();
     };
+  }, []);
+
+  // Actualizar la ruta cuando cambian los puntos
+  useEffect(() => {
+    if (!map || routePoints.length === 0) return;
+
+    // Convertir puntos a formato Leaflet
+    const latLngs = routePoints.map(point => 
+      L.latLng(point.latitude, point.longitude)
+    );
+
+    // Si ya existe una capa de ruta, actualizarla
+    if (routeLayer) {
+      routeLayer.setLatLngs(latLngs);
+    } else {
+      // Crear nueva capa de ruta
+      const newRouteLayer = L.polyline(latLngs, {
+        color: '#3b82f6',
+        weight: 5,
+        opacity: 0.7,
+        lineJoin: 'round',
+      }).addTo(map);
+      
+      setRouteLayer(newRouteLayer);
+      
+      // Ajustar la vista para que se vea toda la ruta
+      if (latLngs.length > 0) {
+        map.fitBounds(newRouteLayer.getBounds(), {
+          padding: [50, 50],
+          maxZoom: 17,
+        });
+      }
+    }
+  }, [map, routePoints]);
+
+  // Actualizar la posición actual en el mapa
+  useEffect(() => {
+    if (!map || !currentPosition) return;
+
+    const { lat, lng } = currentPosition;
+    const position = L.latLng(lat, lng);
+
+    // Actualizar o crear el marcador de posición actual
+    if (marker) {
+      marker.setLatLng(position);
+    } else {
+      const newMarker = L.marker(position, {
+        icon: L.divIcon({
+          className: 'current-location-marker',
+          iconSize: [24, 24],
+          html: `
+            <div style="
+              width: 24px;
+              height: 24px;
+              background: #3b82f6;
+              border: 2px solid white;
+              border-radius: 50%;
+              transform: translate(-12px, -12px);
+              box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            "></div>
+          `
+        })
+      }).addTo(map);
+      
+      setMarker(newMarker);
+    }
+    
+    // Centrar el mapa en la posición actual si es el primer punto
+    if (routePoints.length <= 1) {
+      map.setView(position, 17);
+    }
+  }, [map, currentPosition]);
+
+  // Estilo CSS para el marcador de posición actual
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      .current-location-marker {
+        background: none !important;
+        border: none !important;
+      }
+      .current-location-marker::after {
+        content: '';
+        position: absolute;
+        width: 12px;
+        height: 12px;
+        background: white;
+        border-radius: 50%;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 1;
+      }
+    `;
+    document.head.appendChild(style);
+    
+    return () => {
+      document.head.removeChild(style);
+    };
+  }, []);
+  
+  // Solicitar permisos de ubicación al montar
+  useEffect(() => {
+    requestLocationPermission();
   }, []);
 
   return (
