@@ -29,16 +29,20 @@ interface LocationTrackerProps {
 }
 
 export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDistanceUpdate }) => {
+  // Estados para el seguimiento y permisos
   const [tracking, setTracking] = useState(false);
   const [showPermissionDialog, setShowPermissionDialog] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [isCheckingLocation, setIsCheckingLocation] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<PermissionState>('prompt');
   const [isRequestingPermission, setIsRequestingPermission] = useState(false);
+  
+  // Referencias para mantener valores entre renderizados
   const watchId = useRef<number | null>(null);
   const lastPosition = useRef<GeolocationPosition | null>(null);
   const totalDistance = useRef<number>(0);
   const permissionChecked = useRef(false);
+  const isMounted = useRef(true); // Para evitar actualizaciones después de desmontar
 
   // Fórmula de Haversine para calcular distancia entre dos puntos GPS
   const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -144,6 +148,11 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
 
   const verifyLocationStatus = useCallback(async (showError = true) => {
     try {
+      // Si ya estamos verificando, no hacer nada
+      if (isCheckingLocation) {
+        return { hasPermission: false, isEnabled: false, error: 'Verificación en curso...' };
+      }
+      
       setIsCheckingLocation(true);
       setLocationError(null);
       
@@ -151,6 +160,7 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
       if (!navigator.geolocation) {
         const errorMsg = 'La geolocalización no es compatible con tu navegador. Por favor, utiliza un navegador moderno.';
         if (showError) setLocationError(errorMsg);
+        setIsCheckingLocation(false);
         return { hasPermission: false, isEnabled: false, error: errorMsg };
       }
 
@@ -193,11 +203,23 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
     if (!tripId) return;
     
     try {
+      // Si ya está en proceso de iniciar, no hacer nada
+      if (isCheckingLocation || tracking) return;
+      
       setLocationError(null); // Limpiar errores previos
+      setTracking(true); // Establecer tracking a true inmediatamente para evitar múltiples llamadas
+      
       const isReady = await verifyLocationStatus();
-      if (!isReady) {
+      if (!isReady.hasPermission || !isReady.isEnabled) {
         setTracking(false);
         return;
+      }
+      
+      // Si ya hay un watchId activo, limpiarlo primero
+      if (watchId.current !== null) {
+        navigator.geolocation.clearWatch(watchId.current);
+        watchId.current = null;
+      }
       }
 
       if (!navigator.geolocation) {
@@ -322,7 +344,10 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
 
   // Verificar permisos al cargar el componente
   useEffect(() => {
+    // Función para verificar permisos
     const checkPermissions = async () => {
+      if (!isMounted.current) return;
+      
       try {
         console.log('🔍 Verificando permisos de ubicación...');
         const { hasPermission, isEnabled, error } = await verifyLocationStatus();
@@ -336,65 +361,82 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
           console.log('📍 Seguimiento de ubicación iniciado correctamente');
         } else if (error) {
           console.warn('⚠️ Error en la verificación de permisos:', error);
-          setLocationError(error);
-          setShowPermissionDialog(!hasPermission || !isEnabled);
+          if (isMounted.current) {
+            setLocationError(error);
+            setShowPermissionDialog(!hasPermission || !isEnabled);
+          }
         }
       } catch (error) {
         console.error('❌ Error en checkPermissions:', error);
-        const errorMsg = error instanceof Error ? error.message : 'Error al verificar los permisos de ubicación';
-        setLocationError(errorMsg);
-        setShowPermissionDialog(true);
+        if (isMounted.current) {
+          const errorMsg = error instanceof Error ? error.message : 'Error al verificar los permisos de ubicación';
+          setLocationError(errorMsg);
+          setShowPermissionDialog(true);
+        }
       }
     };
 
-    checkPermissions();
+    // Verificar si ya se verificaron los permisos
+    if (!permissionChecked.current) {
+      checkPermissions();
+      permissionChecked.current = true;
+    }
     
-    // Verificar periódicamente el estado de los permisos
-    const intervalId = setInterval(() => {
-      if (navigator.permissions) {
-        navigator.permissions.query({ name: 'geolocation' as PermissionName }).then(permissionStatus => {
-          console.log('Estado actual del permiso:', permissionStatus.state);
-          if (permissionStatus.state === 'granted' && !tracking) {
-            // Si los permisos se otorgan después de negarse, intentar iniciar el seguimiento
-            startLocationTracking().catch(console.error);
-          }
-        });
-      }
-    }, 5000);
-    
-    return () => clearInterval(intervalId);
-  }, [verifyLocationStatus, startLocationTracking, tracking]);
+    // Limpieza al desmontar
+    return () => {
+      isMounted.current = false;
+    };
+  }, [verifyLocationStatus, startLocationTracking]);
 
   // Manejar el estado de la aplicación (primer plano/segundo plano)
   useEffect(() => {
-    if (!tripId) return;
+    if (!tripId || !isMounted.current) return;
 
-    const handleVisibilityChange = () => {
+    const handleVisibilityChange = async () => {
+      if (!isMounted.current) return;
+      
       if (document.visibilityState === 'visible') {
         // La aplicación está en primer plano
+        console.log('Aplicación en primer plano');
         stopBackgroundTracking();
-        startLocationTracking();
+        
+        // Si ya estamos rastreando, no hacer nada
+        if (tracking) return;
+        
+        // Verificar permisos antes de iniciar el seguimiento
+        try {
+          const { hasPermission, isEnabled } = await verifyLocationStatus(false);
+          if (hasPermission && isEnabled) {
+            await startLocationTracking();
+          }
+        } catch (error) {
+          console.error('Error al verificar permisos al volver a primer plano:', error);
+        }
       } else {
         // La aplicación está en segundo plano o en otra pestaña
+        console.log('Aplicación en segundo plano');
         if (watchId.current !== null) {
           navigator.geolocation.clearWatch(watchId.current);
           watchId.current = null;
         }
-        startBackgroundTracking(tripId);
+        
+        // Iniciar seguimiento en segundo plano solo si estábamos rastreando
+        if (tracking) {
+          startBackgroundTracking(tripId);
+        }
       }
     };
 
     // Registrar el event listener para cambios de visibilidad
     document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    // Iniciar el seguimiento cuando el componente se monta
-    if (!permissionChecked.current) {
-      startLocationTracking();
-      permissionChecked.current = true;
-    }
+    
+    // Verificación inicial de visibilidad
+    handleVisibilityChange();
 
     // Inicializar la caché de rutas al montar
     const init = async () => {
+      if (!isMounted.current) return;
+      
       try {
         await initRouteCache();
         // Cargar puntos de ruta guardados si existen
@@ -413,7 +455,7 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
             );
           }
           totalDistance.current = distance;
-          if (onDistanceUpdate) {
+          if (onDistanceUpdate && isMounted.current) {
             onDistanceUpdate(totalDistance.current);
           }
         }
@@ -426,6 +468,7 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
 
     // Limpiar al desmontar
     return () => {
+      isMounted.current = false;
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       
       if (watchId.current !== null) {
@@ -439,14 +482,31 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
   }, [tripId, startLocationTracking, onDistanceUpdate]);
 
   const stopLocationTracking = useCallback(() => {
+    console.log('Deteniendo seguimiento de ubicación...');
     if (watchId.current !== null) {
       navigator.geolocation.clearWatch(watchId.current);
       watchId.current = null;
     }
     stopBackgroundTracking();
-    setTracking(false);
-    setLocationError(null); // Limpiar el mensaje de error al detener
+    if (isMounted.current) {
+      setTracking(false);
+      setLocationError(null); // Limpiar el mensaje de error al detener
+    }
+    console.log('Seguimiento de ubicación detenido');
   }, []);
+  
+  // Función para manejar el cierre del diálogo de permisos
+  const handleClosePermissionDialog = useCallback(() => {
+    setShowPermissionDialog(false);
+    // Si no estamos rastreando, verificar si podemos iniciar el seguimiento
+    if (!tracking) {
+      verifyLocationStatus().then(({ hasPermission, isEnabled }) => {
+        if (hasPermission && isEnabled) {
+          startLocationTracking().catch(console.error);
+        }
+      });
+    }
+  }, [tracking, verifyLocationStatus, startLocationTracking]);
 
   return (
     <div className="space-y-4">
@@ -514,7 +574,7 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
         </Button>
       </div>
 
-      <Dialog open={showPermissionDialog} onOpenChange={setShowPermissionDialog}>
+      <Dialog open={showPermissionDialog} onOpenChange={handleClosePermissionDialog}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <div className="flex items-center justify-center mb-4">
