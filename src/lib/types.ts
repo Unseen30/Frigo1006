@@ -33,6 +33,8 @@ export interface Trip {
   end_time?: string;
   status: 'active' | 'completed';
   distance?: number;
+  current_location_coords?: string; // GeoJSON POINT string format "POINT(long lat)"
+  location_accuracy?: number; // Accuracy in meters
   created_at: string;
   driver?: Driver;
   truck?: Truck;

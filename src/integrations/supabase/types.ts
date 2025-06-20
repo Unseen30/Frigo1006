@@ -82,6 +82,8 @@ export type Database = {
           start_time: string | null
           status: string
           truck_id: string
+          current_location_coords: string | null  // GeoJSON POINT string format
+          location_accuracy: number | null        // Accuracy in meters
         }
         Insert: {
           cargo_description?: string | null
@@ -96,6 +98,8 @@ export type Database = {
           start_time?: string | null
           status?: string
           truck_id: string
+          current_location_coords?: string | null  // GeoJSON POINT string format
+          location_accuracy?: number | null        // Accuracy in meters
         }
         Update: {
           cargo_description?: string | null
@@ -110,6 +114,8 @@ export type Database = {
           start_time?: string | null
           status?: string
           truck_id?: string
+          current_location_coords?: string | null  // GeoJSON POINT string format
+          location_accuracy?: number | null        // Accuracy in meters
         }
         Relationships: [
           {
