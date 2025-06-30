@@ -5,7 +5,7 @@ import MapView from "@/components/MapView";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery } from "@tanstack/react-query";
-import { LocationTracker } from "@/components/LocationTracker";
+import LocationTracker from "@/components/LocationTracker";
 import { TripHeader } from "@/components/trip/TripHeader";
 import { TripMetrics } from "@/components/trip/TripMetrics";
 import { TripSummary } from "@/components/trip/TripSummary";
