@@ -18,11 +18,14 @@ import {
   DialogHeader, 
   DialogTitle 
 } from "@/components/ui/dialog";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+
+// Extender la interfaz PositionOptions para incluir distanceFilter
+declare global {
+  interface PositionOptions {
+    distanceFilter?: number;
+  }
+}
 
 type PermissionState = 'granted' | 'denied' | 'prompt';
 
@@ -44,7 +47,7 @@ interface LocationTrackerProps {
   onDistanceUpdate?: (distance: number) => void;
 }
 
-export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDistanceUpdate = () => {} }) => {
+const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDistanceUpdate = () => {} }) => {
   // Estados para el seguimiento y permisos
   const [tracking, setTracking] = useState(false);
   const [showPermissionDialog, setShowPermissionDialog] = useState(false);
@@ -59,7 +62,7 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
   const totalDistance = useRef<number>(0);
   const isMounted = useRef(true);
 
-  // Fórmula de Haversine para calcular distancia entre dos puntos GPS
+  // Función para calcular la distancia entre dos puntos usando la fórmula de Haversine
   const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
     if (lat1 === lat2 && lon1 === lon2) return 0;
     const R = 6371; // Radio de la Tierra en km
@@ -79,50 +82,56 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
     return degrees * (Math.PI / 180);
   };
 
-  const handlePositionUpdate = async (position: Position) => {
-    const { latitude, longitude, accuracy } = position.coords;
-    const timestamp = new Date().toISOString();
+  // Función para manejar actualizaciones de posición
+  const handlePositionUpdate = useCallback(async (position: Position) => {
+    const { latitude, longitude, accuracy, speed = null, heading = null } = position.coords;
+    const timestamp = Date.now();
     
-    // Filtrar lecturas con baja precisión (más de 50 metros de error)
-    if (accuracy > 50) {
+    // Filtrar lecturas con baja precisión (más de 30 metros de error)
+    if (accuracy > 30) {
       console.log(`Posición descartada por baja precisión: ${accuracy}m`);
       return;
     }
+    
+    // Filtrar posiciones con velocidad inverosímil (más de 200 km/h)
+    const currentSpeedKmh = speed ? (speed * 3.6) : 0;
+    if (currentSpeedKmh > 200) {
+      console.log(`Posición descartada por velocidad inverosímil: ${currentSpeedKmh.toFixed(1)} km/h`);
+      return;
+    }
+
+    // Crear un nuevo punto de ruta con metadatos adicionales
+    const newPoint = {
+      latitude,
+      longitude,
+      timestamp: new Date(timestamp).toISOString(),
+      accuracy,
+      speed,
+      heading,
+      battery_level: null,
+      altitude: position.coords.altitude,
+      altitude_accuracy: position.coords.altitudeAccuracy
+    };
 
     try {
       // Guardar en caché local
-      await saveRoutePoints(tripId, [{
-        latitude,
-        longitude,
-        timestamp,
-        accuracy
-      }]);
+      await saveRoutePoints(tripId, [newPoint]);
 
-      // Intentar geocodificación inversa para identificar la calle
-      try {
-        const address = await reverseGeocode(latitude, longitude);
-        if (address?.street) {
-          await saveStreet(
-            `${address.street}-${address.city || ''}`,
-            address.street,
-            [{ latitude, longitude }]
-          );
+      // Intentar geocodificación inversa para identificar la calle (solo ocasionalmente para reducir llamadas)
+      if (Math.random() < 0.1) {
+        try {
+          const address = await reverseGeocode(latitude, longitude);
+          if (address?.street) {
+            await saveStreet(
+              `${address.street}-${address.city || ''}`,
+              address.street,
+              [{ latitude, longitude }]
+            );
+          }
+        } catch (geocodeError) {
+          console.warn('No se pudo obtener la dirección:', geocodeError);
         }
-      } catch (geocodeError) {
-        console.warn('No se pudo obtener la dirección:', geocodeError);
       }
-
-      // Guardar en la base de datos
-      const { error } = await supabase
-        .from('route_points')
-        .insert({
-          trip_id: tripId,
-          latitude,
-          longitude,
-          timestamp: new Date().toISOString()
-        });
-
-      if (error) throw error;
 
       // Calcular la distancia si hay una posición anterior
       if (lastPosition.current) {
@@ -134,26 +143,65 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
         );
         
         // Solo agregar la distancia si el movimiento es significativo (más de 10 metros)
-        if (distanceSegment > 0.01) {
-          totalDistance.current += distanceSegment;
-          onDistanceUpdate(totalDistance.current);
-
-          // Actualizar la distancia en la tabla de viajes
-          await supabase
-            .from('trips')
-            .update({ distance: totalDistance.current })
-            .eq('id', tripId);
-
+        // y la velocidad es razonable (menos de 150 km/h)
+        const maxSpeedKmh = 150; // Aumentado ligeramente para cubrir más casos
+        const minDistanceKm = 0.01; // 10 metros (aumentado de 5m)
+        
+        if (distanceSegment > minDistanceKm && currentSpeedKmh < maxSpeedKmh) {
+          // Suavizar la distancia para evitar picos
+          const smoothedDistance = distanceSegment * (1 - Math.min(0.9, currentSpeedKmh / 200));
+          totalDistance.current += smoothedDistance;
+          
+          // Actualizar la distancia cada 50 metros o 15 segundos (más frecuente)
+          const shouldUpdateDistance = 
+            smoothedDistance > 0.05 || // 50 metros
+            Date.now() - (lastPosition.current?.timestamp || 0) > 15000; // 15 segundos
+          
+          if (shouldUpdateDistance && onDistanceUpdate) {
+            onDistanceUpdate(totalDistance.current);
+            
+            // Actualizar la distancia en la tabla de viajes
+            await supabase
+              .from('trips')
+              .update({ 
+                distance: totalDistance.current,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', tripId);
+          }
+          
           console.log(`Distancia agregada: ${distanceSegment.toFixed(3)} km - Total: ${totalDistance.current.toFixed(2)} km`);
+          
+          // Guardar en la base de datos (solo puntos significativos)
+          const { error } = await supabase
+            .from('route_points')
+            .insert({
+              trip_id: tripId,
+              latitude,
+              longitude,
+              accuracy,
+              speed: speed || 0,
+              heading: heading || null,
+              timestamp: new Date().toISOString()
+            });
+
+          if (error) console.error('Error al guardar punto de ruta:', error);
         }
+      } else {
+        // Es el primer punto, actualizar la distancia inicial
+        if (onDistanceUpdate) onDistanceUpdate(0);
       }
 
-      lastPosition.current = position;
+      // Actualizar la última posición
+      lastPosition.current = {
+        ...position,
+        timestamp: Date.now()
+      };
     } catch (error) {
       console.error('Error al guardar la ubicación:', error);
       toast.error('Error al actualizar la ubicación');
     }
-  };
+  }, [tripId, onDistanceUpdate]);
 
   // Función para verificar el estado de la ubicación
   const verifyLocationStatus = useCallback(async (showError = true) => {
@@ -204,148 +252,134 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
     }
   }, [isCheckingLocation]);
 
+  // Función para obtener la posición actual
+  const getInitialPosition = (options: PositionOptions) => {
+    return new Promise<Position>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => resolve(position as Position),
+        reject,
+        options
+      );
+    });
+  };
+
   // Función para detener el seguimiento
   const stopLocationTracking = useCallback(() => {
     if (watchId.current !== null) {
       navigator.geolocation.clearWatch(watchId.current);
       watchId.current = null;
+      setTracking(false);
+      return true;
     }
-    setTracking(false);
-    toast.info('Seguimiento de ubicación detenido');
+    return false;
   }, []);
 
-  // Función para iniciar el seguimiento de ubicación
-  const startLocationTracking = useCallback(async () => {
-    if (!tripId) return;
-    
+  // Función para iniciar el seguimiento
+  const startTracking = useCallback(async () => {
     try {
-      if (isCheckingLocation || tracking) return;
-      
-      setLocationError(null);
-      setTracking(true);
-      
-      const isReady = await verifyLocationStatus();
-      if (!isReady.hasPermission || !isReady.isEnabled) {
-        setTracking(false);
-        return;
-      }
-      
-      // Limpiar cualquier seguimiento previo
-      if (watchId.current !== null) {
-        navigator.geolocation.clearWatch(watchId.current);
-        watchId.current = null;
-      }
-
-      const onPositionSuccess = (position: Position) => {
-        if (!isMounted.current) return;
-        setLocationError(null);
-        handlePositionUpdate(position);
+      // Configurar opciones de geolocalización optimizadas
+      const options: PositionOptions & { distanceFilter?: number } = {
+        enableHighAccuracy: true, // Usar GPS si está disponible
+        timeout: 10000, // Reducido de 15s a 10s para mejor respuesta
+        maximumAge: 10000, // Aceptar lecturas de hasta 10 segundos de antigüedad
+        distanceFilter: 10 // Aumentado de 5m a 10m para mejor rendimiento
       };
-
-      const onPositionError = (error: GeolocationPositionError) => {
-        if (!isMounted.current) return;
-        
-        console.error('Error de geolocalización:', error);
-        let errorMessage = 'Error al obtener la ubicación';
-        
-        switch(error.code) {
-          case error.PERMISSION_DENIED:
-            errorMessage = 'Permiso de ubicación denegado. Por favor, activa la ubicación en la configuración de tu dispositivo y actualiza la página.';
-            setPermissionStatus('denied');
-            setShowPermissionDialog(true);
-            setTracking(false);
-            break;
-          case error.POSITION_UNAVAILABLE:
-            errorMessage = 'La información de ubicación no está disponible. Asegúrate de tener conexión a Internet y el GPS activado.';
-            setTracking(false);
-            break;
-          case error.TIMEOUT:
-            errorMessage = 'Tiempo de espera agotado al intentar obtener la ubicación. Verifica tu conexión a Internet.';
-            setTracking(false);
-            break;
-        }
-        
-        setLocationError(errorMessage);
-        toast.error(errorMessage);
-      };
-
-      // Obtener la posición actual primero
-      const position = await new Promise<Position>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => resolve(pos as unknown as Position),
-          reject,
-          {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 0
+      
+      // Ajustar configuración según el estado de la batería
+      if ('getBattery' in navigator) {
+        try {
+          const battery = await (navigator as any).getBattery();
+          if (battery) {
+            // Si la batería está por debajo del 20%, reducir la precisión
+            if (battery.level < 0.2) {
+              options.enableHighAccuracy = false;
+              options.distanceFilter = 20; // Aumentar distancia mínima
+              console.log('Modo bajo consumo activado (batería < 20%)');
+            }
+            
+            // Escuchar cambios en el estado de la batería
+            battery.addEventListener('levelchange', () => {
+              if (battery.level < 0.2) {
+                if (watchId.current !== null) {
+                  navigator.geolocation.clearWatch(watchId.current);
+                  options.enableHighAccuracy = false;
+                  options.distanceFilter = 20;
+                  watchId.current = navigator.geolocation.watchPosition(
+                    handlePositionUpdate as PositionCallback,
+                    (error) => console.error('Error en geolocalización:', error),
+                    options
+                  );
+                }
+              }
+            });
           }
-        );
-      });
-
-      // Si llegamos aquí, la ubicación está disponible
-      onPositionSuccess(position);
-      
-      // Iniciar el seguimiento continuo
-      watchId.current = navigator.geolocation.watchPosition(
-        (pos) => onPositionSuccess(pos as unknown as Position),
-        onPositionError,
-        {
-          enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 30000
+        } catch (error) {
+          console.warn('No se pudo acceder a la información de la batería:', error);
         }
-      );
+      }
 
-      setTracking(true);
-      toast.success('Seguimiento de ubicación iniciado');
-    } catch (error) {
-      console.error('Error al iniciar el seguimiento de ubicación:', error);
-      setLocationError('No se pudo acceder a la ubicación. Verifica los permisos y la configuración.');
-      setShowPermissionDialog(true);
-      setTracking(false);
-    }
-  }, [tripId, isCheckingLocation, tracking, verifyLocationStatus]);
-
-  // Manejar la activación de la ubicación desde el diálogo
-  const handleEnableLocation = useCallback(async () => {
-    try {
-      setIsRequestingPermission(true);
-      setLocationError(null);
+      // Obtener posición inicial
+      const initialPosition = await getInitialPosition(options);
+      await handlePositionUpdate(initialPosition);
       
-      // Solicitar permisos
-      const { granted, message } = await requestLocationPermissions();
+      const { granted } = await requestLocationPermissions();
       
       if (granted) {
         setPermissionStatus('granted');
         setShowPermissionDialog(false);
         
-        // Verificar el estado después de conceder permisos
-        const { isEnabled, error: statusError } = await verifyLocationStatus(false);
+        // Iniciar el seguimiento de ubicación
+        setTracking(true);
+        setLocationError(null);
         
-        if (isEnabled) {
-          // Iniciar el seguimiento de ubicación
-          await startLocationTracking();
-          toast.success('Seguimiento de ubicación activado');
-        } else {
-          const errorMsg = statusError || 'Activa la ubicación en la configuración de tu dispositivo';
-          setLocationError(errorMsg);
-          setShowPermissionDialog(true);
-        }
+        // Configurar el watchPosition
+        watchId.current = navigator.geolocation.watchPosition(
+          handlePositionUpdate as PositionCallback,
+          (error) => {
+            console.error('Error en geolocalización:', error);
+            setLocationError('Error al obtener la ubicación. Verifica la configuración de ubicación.');
+            stopLocationTracking();
+          },
+          options
+        );
+        
+        toast.success('Seguimiento de ubicación activado');
       } else {
         setPermissionStatus('denied');
-        const errorMsg = message || 'Se requieren permisos de ubicación para continuar';
-        setLocationError(errorMsg);
+        setLocationError('Se requieren permisos de ubicación para continuar');
         setShowPermissionDialog(true);
       }
     } catch (error) {
-      console.error('Error al solicitar permisos:', error);
-      const errorMsg = error instanceof Error ? error.message : 'Error al solicitar permisos de ubicación';
+      console.error('Error al iniciar el seguimiento:', error);
+      const errorMsg = error instanceof Error ? error.message : 'Error desconocido al iniciar el seguimiento';
       setLocationError(errorMsg);
       setShowPermissionDialog(true);
+    }
+  }, [handlePositionUpdate, stopLocationTracking]);
+
+  // Función para manejar la habilitación de la ubicación
+  const handleEnableLocation = useCallback(async () => {
+    if (isRequestingPermission) return;
+    
+    setIsRequestingPermission(true);
+    setLocationError(null);
+    
+    try {
+      const { hasPermission, isEnabled, error } = await verifyLocationStatus(true);
+      
+      if (hasPermission && isEnabled) {
+        await startTracking();
+        setShowPermissionDialog(false);
+      } else if (error) {
+        setLocationError(error);
+      }
+    } catch (error) {
+      console.error('Error al habilitar la ubicación:', error);
+      setLocationError('No se pudo habilitar la ubicación. Verifica la configuración de tu dispositivo.');
     } finally {
       setIsRequestingPermission(false);
     }
-  }, [startLocationTracking, verifyLocationStatus]);
+  }, [isRequestingPermission, verifyLocationStatus, startTracking]);
 
   // Efecto para verificar permisos al montar
   useEffect(() => {
@@ -360,7 +394,7 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
         
         if (hasPermission && isEnabled) {
           console.log('🚀 Permisos y ubicación activados, iniciando seguimiento...');
-          await startLocationTracking();
+          await startTracking();
           console.log('📍 Seguimiento de ubicación iniciado correctamente');
         } else if (error) {
           console.warn('⚠️ Error en la verificación de permisos:', error);
@@ -386,11 +420,9 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
     // Limpieza al desmontar
     return () => {
       isMounted.current = false;
-      if (watchId.current !== null) {
-        navigator.geolocation.clearWatch(watchId.current);
-      }
+      stopLocationTracking();
     };
-  }, [tripId, verifyLocationStatus, startLocationTracking]);
+  }, [tripId, verifyLocationStatus, stopLocationTracking, startTracking]);
 
   return (
     <div className="space-y-4">
@@ -406,7 +438,7 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
         <div className="flex items-center space-x-2">
           <Button
             variant={tracking ? 'destructive' : 'default'}
-            onClick={tracking ? stopLocationTracking : startLocationTracking}
+            onClick={tracking ? stopLocationTracking : startTracking}
             disabled={isRequestingPermission || isCheckingLocation}
             className="min-w-[180px] justify-start"
           >
@@ -470,3 +502,5 @@ export const LocationTracker: React.FC<LocationTrackerProps> = ({ tripId, onDist
     </div>
   );
 };
+
+export default LocationTracker;
