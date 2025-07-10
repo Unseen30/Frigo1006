@@ -23,6 +23,8 @@ interface UseTrackingReturn {
   finalizarViaje: () => Promise<{ success: boolean; viajeId?: string; error?: string }>;
   viajeActivo: boolean;
   idViajeActual: string | null;
+  distanciaRecorrida: number;
+  actualizarDistancia: (nuevaDistancia: number) => void;
 }
 
 export function useTracking(activar: boolean): UseTrackingReturn {
@@ -30,6 +32,7 @@ export function useTracking(activar: boolean): UseTrackingReturn {
   const [error, setError] = useState<string | null>(null);
   const [idViajeActual, setIdViajeActual] = useState<string | null>(null);
   const [viajeActivo, setViajeActivo] = useState(false);
+  const [distanciaRecorrida, setDistanciaRecorrida] = useState<number>(0);
 
   // Función para obtener la ruta de un viaje
   const obtenerRutaViaje = async (viajeId: string): Promise<Ubicacion[]> => {
@@ -179,11 +182,24 @@ export function useTracking(activar: boolean): UseTrackingReturn {
     };
   }, [activar]);
 
+  const actualizarDistancia = async (nuevaDistancia: number) => {
+    setDistanciaRecorrida(nuevaDistancia);
+    
+    if (idViajeActual) {
+      await supabase
+        .from('viajes')
+        .update({ distance: nuevaDistancia })
+        .eq('id', idViajeActual);
+    }
+  };
+
   return { 
     error, 
     obtenerRutaViaje,
     finalizarViaje,
     viajeActivo,
-    idViajeActual
+    idViajeActual,
+    distanciaRecorrida,
+    actualizarDistancia
   };
 }
