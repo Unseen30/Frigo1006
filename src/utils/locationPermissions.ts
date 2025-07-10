@@ -92,7 +92,25 @@ export const checkLocationPermissions = async (): Promise<{granted: boolean, mes
             return { granted: false, message };
           }
           
-          // Si está en 'prompt', forzar el diálogo con getCurrentPosition
+          // En desarrollo, usar la API de geolocalización real del navegador
+          if (process.env.NODE_ENV === 'development') {
+            console.log('🛠️ Modo desarrollo: usando ubicación real del navegador');
+            return new Promise((resolve) => {
+              navigator.geolocation.getCurrentPosition(
+                () => resolve({ granted: true }),
+                (error) => {
+                  console.error('Error al obtener ubicación real:', error);
+                  resolve({ 
+                    granted: false, 
+                    message: 'No se pudo obtener tu ubicación. Asegúrate de haber concedido los permisos.'
+                  });
+                },
+                { enableHighAccuracy: true, timeout: 10000 }
+              );
+            });
+          }
+
+          // En producción, manejar la solicitud de permisos normal
           console.log('🔍 El navegador está listo para solicitar permisos');
           
           // Crear una promesa que se resolverá cuando el usuario responda al diálogo
