@@ -1,6 +1,6 @@
 
 import { Button } from "@/components/ui/button";
-import RouteMap from "../RouteMap";
+import MapboxRouteViewer from "../MapboxRouteViewer";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -32,8 +32,6 @@ export const TripMap = ({ trip }: TripMapProps) => {
     enabled: showMap,
   });
 
-  if (trip.status !== "completed") return null;
-
   return (
     <div className="space-y-4">
       <Button
@@ -61,7 +59,12 @@ export const TripMap = ({ trip }: TripMapProps) => {
           <p className="text-sm text-gray-600">
             Mostrando ruta con {routePoints.length} puntos registrados
           </p>
-          <RouteMap routePoints={routePoints} />
+          <MapboxRouteViewer 
+            routePoints={routePoints} 
+            routeType={trip.status === "completed" ? "completed" : "active"}
+            showStats={true}
+            showControls={true}
+          />
         </div>
       )}
     </div>

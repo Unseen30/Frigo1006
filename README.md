@@ -52,13 +52,44 @@ npm run dev
 
 ## What technologies are used for this project?
 
-This project is built with .
+This project is built with:
 
 - Vite
 - TypeScript
 - React
 - shadcn-ui
 - Tailwind CSS
+- Mapbox GL JS (para visualización avanzada de mapas)
+- Supabase (para almacenamiento de datos)
+- Capacitor (para funcionalidades móviles)
+
+## Implementación de Mapbox
+
+Para la visualización de mapas y rutas, hemos integrado Mapbox GL JS con las siguientes características:
+
+1. **Componente principal**: `MapboxRouteViewer`
+   - Visualización interactiva de rutas
+   - Seguimiento en tiempo real
+   - Estadísticas de distancia y velocidad
+
+2. **Configuración**:
+   - Estilos personalizados en `src/utils/mapbox.ts`
+   - Tipos de datos para coordenadas y rutas
+   - Integración con Supabase para almacenamiento de puntos de ruta
+
+3. **Uso**:
+   ```tsx
+   import MapboxRouteViewer from '@/components/MapboxRouteViewer';
+   
+   <MapboxRouteViewer 
+     routePoints={routeData} 
+     onRouteUpdate={handleUpdate}
+   />
+   ```
+
+4. **Requisitos**:
+   - Token de acceso de Mapbox (configurado en variables de entorno)
+   - Dependencias: `mapbox-gl`, `@types/mapbox-gl`
 
 ## How can I deploy this project?
 
